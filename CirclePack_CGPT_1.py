@@ -10,9 +10,7 @@ result = pack_circles_from_image(
 )
 
 The function returns a dictionary with the exact required schema, or {'error': '...'} on failure.
-"""
 
-"""
 Mi-Tiente  Colours
 user_colors = [
     # (89, 69, 57),     # Tobacco 501
@@ -27,7 +25,6 @@ user_colors = [
     (7, 145, 176)     # Turquoise blue 595
 ]
 """
-
 from __future__ import annotations
 import cv2
 import numpy as np
@@ -276,7 +273,26 @@ def pack_circles_from_image(
                 counts[c['radius']] = counts.get(c['radius'], 0) + 1
                 # Draw on visualization (BGR expected)
                 bgr = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
-                cv2.circle(packed_visual, (c['center'][0], c['center'][1]), c['radius'], bgr, thickness=2)
+                #cv2.circle(packed_visual, (c['center'][0], c['center'][1]), c['radius'], bgr, thickness=2)
+                # Draw a filled disc in the region color, then a thin darker outline for legibility
+                cv2.circle(
+                    packed_visual,
+                    (c['center'][0], c['center'][1]),
+                    c['radius'],
+                    bgr,
+                    thickness=-1,                 # <-- filled
+                    lineType=cv2.LINE_AA
+                )
+                outline = tuple(int(v * 0.7) for v in bgr)  # slightly darker edge
+                cv2.circle(
+                    packed_visual,
+                    (c['center'][0], c['center'][1]),
+                    c['radius'],
+                    outline,
+                    thickness=2,
+                    lineType=cv2.LINE_AA
+                )
+
 
             circle_size_counts = sorted([(int(r), int(n)) for r, n in counts.items()], key=lambda t: -t[0])
 
