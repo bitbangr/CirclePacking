@@ -23,3 +23,5 @@ dist/
 
 # Jupyter
 .ipynb_checkpoints/
+
+circle_packing_pat
