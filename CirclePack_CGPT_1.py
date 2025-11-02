@@ -13,6 +13,7 @@ The function returns a dictionary with the exact required schema, or {'error': '
 """
 
 """
+Mi-Tiente  Colours
 user_colors = [
     # (89, 69, 57),     # Tobacco 501
     (178, 113, 14),   # Havana clear 502
@@ -26,8 +27,6 @@ user_colors = [
     (7, 145, 176)     # Turquoise blue 595
 ]
 """
-
-
 
 from __future__ import annotations
 import cv2
