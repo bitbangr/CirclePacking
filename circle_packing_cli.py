@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+
+""" 
+circle_packing_cli.py 
+
+Generates a circle-packed representation and a build CSV from an input image,
+respecting a physical board size (mm), circle size set (mm), and color palette.
+
+Outputs per run:
+  - packing_<ID>.png                (overlay: original/cropped image + circles)
+  - packing_<ID>_circles_only.png   (circles drawn on black)
+  - packing_<ID>_layout.csv         (grid_cell, position_in_mm, diameter_in_mm, color_rgb, color_name)
+and prints a JSON summary to stdout (optionally pretty).
+"""
+
 from __future__ import annotations
 import argparse, json, os, uuid, math
 from typing import List, Tuple, Dict, Any, Optional
@@ -53,7 +67,7 @@ DRAW_LINE_TYPE = cv2.LINE_AA
 BRUTE_FORCE_LIMIT = 8
 
 # =========================
-# Preprocessing: mosaic labaling
+# Preprocessing: mosaic labeling
 # =========================
 def mosaic_labels_by_user_colors(img_bgr: np.ndarray,
                                  user_colors_bgr: List[Tuple[int,int,int]],
@@ -187,6 +201,114 @@ def pack_region_with_circles_dt(mask: np.ndarray,
         print(f"[DT] diameter={d} placed={placed_this_d}")
 
     return circles
+
+
+
+# =========================
+# Helpers for mm/grid/CSV
+# =========================
+DEFAULT_GRID_LABEL_BASE = "A"
+CSV_FIELDS = ["grid_cell","position_in_mm","diameter_in_mm","color_rgb","color_name"]
+ROUND_MODES = {"nearest","floor","ceil"}
+
+def center_crop_to_aspect(img, target_w_mm: float, target_h_mm: float):
+    h, w = img.shape[:2]
+    tgt = float(target_w_mm) / float(target_h_mm)
+    cur = float(w) / float(h)
+    if abs(cur - tgt) < 1e-12:
+        return img
+    if cur > tgt:
+        new_w = int(round(h * tgt))
+        x0 = (w - new_w) // 2
+        return img[:, x0:x0+new_w]
+    new_h = int(round(w / tgt))
+    y0 = (h - new_h) // 2
+    return img[y0:y0+new_h, :]
+
+def round_mm(value_mm: float, mode: str, step_mm: float) -> int:
+    import math
+    if step_mm <= 0: raise ValueError("mm_rounding.step_mm must be > 0")
+    q = value_mm / step_mm
+    if mode == "nearest": r = round(q)
+    elif mode == "floor": r = math.floor(q)
+    elif mode == "ceil": r = math.ceil(q)
+    else: raise ValueError(f"Unsupported rounding mode: {mode}")
+    return int(r * step_mm)
+
+def grid_cell_for(x_px: int, y_px: int, img_w: int, img_h: int, grid_n: int, epsilon: float,
+                  base_letter: str = DEFAULT_GRID_LABEL_BASE) -> str:
+    import math
+    cell_w = img_w / float(grid_n)
+    cell_h = img_h / float(grid_n)
+    col = int(math.floor((x_px - epsilon) / cell_w))
+    row = int(math.floor((y_px - epsilon) / cell_h))
+    col = max(0, min(grid_n - 1, col))
+    row = max(0, min(grid_n - 1, row))
+    return chr(ord(base_letter) + col) + str(row + 1)
+
+def write_layout_csv(
+    csv_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    user_colors: list[tuple[int,int,int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    grid_n: int,
+    boundary_epsilon: float,
+    mm_round_mode: str,
+    mm_round_step: float,
+) -> None:
+    import csv, os
+    if mm_round_mode not in ROUND_MODES:
+        raise ValueError(f"mm_rounding.mode must be one of {sorted(ROUND_MODES)}")
+    px_to_mm_x = board_w_mm / float(img_w)
+    px_to_mm_y = board_h_mm / float(img_h)
+
+    name_map = {}
+    if color_names and len(color_names) >= len(user_colors):
+        for rgb, nm in zip(user_colors, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
+
+    rows = []
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        nm = name_map.get(rgb, "")
+        for c in reg["circles"]:
+            cx, cy = c["center"]
+            d_px = int(c["radius"]) * 2
+
+            x_mm_f = cx * px_to_mm_x
+            y_mm_f = cy * px_to_mm_y
+            d_mm_f = d_px * px_to_mm_x  # square pixels → x-scale ok
+
+            x_mm = round_mm(x_mm_f, mm_round_mode, mm_round_step)
+            y_mm = round_mm(y_mm_f, mm_round_mode, mm_round_step)
+            d_mm = round_mm(d_mm_f, mm_round_mode, mm_round_step)
+
+            cell = grid_cell_for(cx, cy, img_w, img_h, grid_n, boundary_epsilon)
+            rows.append({
+                "grid_cell": cell,
+                "position_in_mm": f"[{x_mm}, {y_mm}]",
+                "diameter_in_mm": d_mm,
+                "color_rgb": f"[{rgb[0]}, {rgb[1]}, {rgb[2]}]",
+                "color_name": nm
+            })
+
+    def sort_key(r):
+        col = ord(r["grid_cell"][0]) - ord(DEFAULT_GRID_LABEL_BASE)
+        row = int(r["grid_cell"][1:]) - 1
+        return (row, col, -int(r["diameter_in_mm"]))
+
+    rows.sort(key=sort_key)
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
 
 
 
@@ -341,10 +463,12 @@ def pack_circles_from_image(
             ensure_bool(isinstance(tup, (list, tuple)) and len(tup) == 3,
                         "Each user color must be a 3-tuple/list (R,G,B).")
 
-        if circle_sizes is None:
-            circle_sizes = DEFAULT_CIRCLE_SIZES
-        ensure_bool(isinstance(circle_sizes, list) and len(circle_sizes) >= 1,
-                    "circle_sizes must be a non-empty list of diameters (ints).")
+        # if circle_sizes is None:
+        #     circle_sizes = DEFAULT_CIRCLE_SIZES
+        # ensure_bool(isinstance(circle_sizes, list) and len(circle_sizes) >= 1,
+        #             "circle_sizes must be a non-empty list of diameters (ints).")
+
+    
 
         ensure_bool(isinstance(output_size, (list, tuple)) and len(output_size) == 2,
                     "output_size must be (width, height).")
@@ -352,6 +476,14 @@ def pack_circles_from_image(
         # Load & resize image
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
         ensure_bool(img is not None, f"Image loading failed for path: {img_path}")
+        
+        # *****************************
+        # Respect final physical aspect ratio in mm, then resize to pixel canvas
+        if preprocess_cfg and "__output_size_mm__" in preprocess_cfg:
+            out_w_mm, out_h_mm = preprocess_cfg["__output_size_mm__"]
+            img = center_crop_to_aspect(img, out_w_mm, out_h_mm)
+        # ******************************
+        
         width, height = int(output_size[0]), int(output_size[1])
         img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
         h, w = img.shape[:2]
@@ -383,21 +515,6 @@ def pack_circles_from_image(
             label_img = labels.reshape(h, w)
             print("[OK] K-means produced expected clusters.")
 
-# # comment out
-#         # K-means quantization
-#         announce("KMEANS_CLUSTERING", {"num_regions": num_regions, "pixels": h * w})
-#         pixels = img.reshape(-1, 3).astype(np.float32)
-#         try:
-#             kmeans = KMeans(n_clusters=num_regions, n_init=KMEANS_N_INIT, random_state=KMEANS_RANDOM_STATE)
-#             labels = kmeans.fit_predict(pixels)
-#             centers = kmeans.cluster_centers_.astype(np.uint8)  # BGR
-#         except Exception as e:
-#             return {"error": f"K-means failed: {str(e)}"}
-#         ensure_bool(len(np.unique(labels)) == num_regions,
-#                     f"K-means did not produce {num_regions} distinct clusters.")
-#         label_img = labels.reshape(h, w)
-#         print("[OK] K-means produced expected clusters.")
-# # comment out
 
         # Map clusters to user colors (nearest in Euclidean BGR space)
         announce("MAP_CLUSTERS_TO_USER_COLORS", {"method": "minimize total Euclidean distance"})
@@ -505,20 +622,40 @@ def pack_circles_from_image(
 
         print("[NOTE] Circle packing is NP-hard; alternative diameter sets or local refinements may yield denser packings.")
 
+        # One session ID for all outputs
+        session_id = uuid.uuid4().hex
+
         # Save visualization
         os.makedirs(visualization_outdir, exist_ok=True)
-        vis_path = os.path.join(visualization_outdir, f"packing_{uuid.uuid4().hex}.png")
+        vis_path = os.path.join(visualization_outdir, f"packing_{session_id}.png")
         announce("SAVE_VISUALIZATION", {"path": vis_path, "size": (w, h)})
         ok = cv2.imwrite(vis_path, packed_visual)
         ensure_bool(ok, "Failed to save visualization image.")
         print("[OK] Visualization saved.")
 
         # NEW: circles-only (transparent PNG)
-        circles_only_path = os.path.join(visualization_outdir, f"packing_{uuid.uuid4().hex}_circles_only.png")
+        circles_only_path = os.path.join(visualization_outdir, f"packing_{session_id}_circles_only.png")
         announce("SAVE_VISUALIZATION", {"path": circles_only_path, "type": "circles_only_bgra"})
         ok2 = cv2.imwrite(circles_only_path, packed_circles_only)
         ensure_bool(ok2, "Failed to save circles-only visualization.")
         print(f"[OK] Circles-only visualization saved: {circles_only_path}")
+
+        # --- NEW: Save CSV using your computed circles (no detection) ---
+        csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.csv")
+        write_layout_csv(
+            csv_path=csv_path,
+            regions=all_regions_output,             # <-- use your computed circles
+            img_w=w, img_h=h,
+            user_colors=[(int(c[0]), int(c[1]), int(c[2])) for c in user_colors],
+            color_names=preprocess_cfg.get("__color_names__", None) if preprocess_cfg else None,
+            board_w_mm=preprocess_cfg["__output_size_mm__"][0],
+            board_h_mm=preprocess_cfg["__output_size_mm__"][1],
+            grid_n=int(preprocess_cfg.get("__grid_divisions__", 10)),
+            boundary_epsilon=float(preprocess_cfg.get("__boundary_epsilon__", 1e-9)),
+            mm_round_mode=str(preprocess_cfg.get("__mm_round_mode__", "nearest")),
+            mm_round_step=float(preprocess_cfg.get("__mm_round_step__", 1)),
+        )
+        print(f"[OK] CSV layout saved: {csv_path}")
 
         # Final structure validation
         announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
@@ -542,11 +679,27 @@ def pack_circles_from_image(
                             "circle_size_counts entries must be (radius, count).")
         print("[OK] Output schema validated.")
 
+        # return {
+        #     "regions": all_regions_output,
+        #     "visualization": vis_path,
+        #     "visualization_type": "file",
+        #     "image_size": (int(w), int(h))
+        # }
+
         return {
             "regions": all_regions_output,
             "visualization": vis_path,
             "visualization_type": "file",
-            "image_size": (int(w), int(h))
+            "circles_only": circles_only_path,
+            "csv_layout": csv_path,
+            "image_size": (int(w), int(h)),
+            "output_size_mm": preprocess_cfg.get("__output_size_mm__", None),
+            "grid_divisions": int(preprocess_cfg.get("__grid_divisions__", 10)),
+            "mm_rounding": {
+                "mode": str(preprocess_cfg.get("__mm_round_mode__", "nearest")),
+                "step_mm": float(preprocess_cfg.get("__mm_round_step__", 1)),
+            },
+            "session_id": session_id
         }
 
     except Exception as e:
@@ -587,20 +740,79 @@ def main():
         print(json.dumps({"error": f"Failed to read config: {e}"}))
         return
 
+
+# ********************************
+    # after cfg = yaml.safe_load(...)
+    # --- 1. Physical settings (from YAML) ---
+    phys = cfg["physical"]
+    out_w_mm, out_h_mm = map(float, phys["output_size_mm"])
+    min_d_mm = float(phys.get("min_circle_diameter_mm", 13))
+    grid_divs = int(phys.get("grid_divisions", 10))
+    boundary_epsilon = float(phys.get("boundary_epsilon", 1e-9))
+    mmr = phys.get("mm_rounding", {})
+    mm_round_mode = str(mmr.get("mode", "nearest")).lower()
+    mm_round_step = float(mmr.get("step_mm", 1))
+
+    # --- 2. Rendering settings ---
+    # These are just your pixel canvas dimensions and output directory
+    render = argparse.Namespace(
+        output_w_px=int(cfg.get("output_size", [1000, 1000])[0]),
+        output_h_px=int(cfg.get("output_size", [1000, 1000])[1]),
+        outdir=str(cfg.get("visualization_outdir", "./circle_packing_outputs"))
+    )
+
+    # --- render (pixels) ---
+    out_w_px, out_h_px = map(int, cfg.get("output_size", [1000, 1000]))
+
+    # --- 3. Circle sizes conversion (mm → px) ---
+    circle_sizes_mm = cfg.get("circle_sizes_mm", [])
+    if not circle_sizes_mm:
+        raise ValueError("Missing 'circle_sizes_mm' in config.yaml")
+
+    px_per_mm_x = render.output_w_px / float(out_w_mm)
+    circle_sizes_px_desc = sorted(
+        {int(round(d_mm * px_per_mm_x)) for d_mm in circle_sizes_mm if d_mm >= min_d_mm},
+        reverse=True
+    )
+
+    if not circle_sizes_px_desc:
+        raise ValueError("No valid circle sizes (after filtering by min_d_mm).")
+
     img_path = cfg.get("img_path")
-    user_colors = _normalize_rgb_list(cfg.get("user_colors"))
+  
+    # --- Extract user colors in {name, rgb} format ---
+    # --- colors (strict {name,rgb}) ---
+    ucfg = cfg["user_colors"]
+    user_colors  = [tuple(int(v) for v in e["rgb"]) for e in ucfg]
+    color_names  = [str(e["name"]) for e in ucfg]
+
     circle_sizes = cfg.get("circle_sizes", None)
     output_size_raw = cfg.get("output_size", list(DEFAULT_OUTPUT_SIZE))
     output_size = (int(output_size_raw[0]), int(output_size_raw[1]))
     visualization_outdir = cfg.get("visualization_outdir", "./circle_packing_outputs")
 
+
+    # --- 4. Now build preprocess_cfg (this is what pack_circles_from_image uses) ---
+    preprocess_cfg = {
+            "__color_names__": color_names,
+            "__output_size_mm__": (out_w_mm, out_h_mm),   # <-- this is what your crop block uses
+            "__grid_divisions__": grid_divs,
+            "__boundary_epsilon__": boundary_epsilon,
+            "__mm_round_mode__": mm_round_mode,
+            "__mm_round_step__": mm_round_step,
+            "__min_d_mm__": float(phys.get("min_circle_diameter_mm", 13)),
+        }
+
     result = pack_circles_from_image(
-        img_path=img_path,
-        user_colors=user_colors,
-        circle_sizes=[int(x) for x in circle_sizes] if circle_sizes is not None else None,
-        output_size=output_size,
-        visualization_outdir=visualization_outdir
-    )
+            img_path=img_path,
+            user_colors=user_colors,
+            circle_sizes=circle_sizes_px_desc,
+            output_size=(render.output_w_px, render.output_h_px),
+            visualization_outdir=render.outdir,
+            preprocess_cfg=preprocess_cfg      # <-- must be passed in
+        )
+# ********************************
+# ******************************* 
 
     # Convert tuples to lists for JSON printing
     def tuplify(o):
