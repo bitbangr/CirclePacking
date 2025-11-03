@@ -1,5 +1,6 @@
 # Circle packing configuration (YAML)
-img_path: "./4x4_Kroma_16.png"          # Path to your JPG
+# img_path: "./images/4x4_Kroma_16.png"          # Path to your JPG
+img_path: "./images/mary_blaze_colour_apr2023_2.png" 
 
 # Exactly six RGB colors, in the order you want regions reported
 user_colors:
@@ -9,13 +10,15 @@ user_colors:
   - [160, 32, 140]   # Violet 507
   - [253, 184, 19]   # Cadmium yellow deep 553
   - [20, 144, 89]    # Viridian 575
-    # - [0, 105, 170]    # Ultramarine 590
-    # - [89, 69, 57]     # Tobacco 501
-    # - [93, 64, 64]     # Winelees 503
-    # - [229, 14, 99]    # Bright red 505
+  - [0, 105, 170]    # Ultramarine 590
+  - [89, 69, 57]     # Tobacco 501
+  - [93, 64, 64]     # Winelees 503
+  - [229, 14, 99]    # Bright red 505
 
 # Optional: six allowed diameters (px). If omitted, defaults are used.
-circle_sizes: [10, 30, 20, 50, 100, 150]
+# circle_sizes: [10, 30, 20, 50, 100, 150]
+circle_sizes: [150, 100, 64, 48, 32, 24, 16, 12, 8, 6, 4]
+
 
 # Optional output (width, height). Default is [1000, 1000].
 output_size: [1000, 1000]
