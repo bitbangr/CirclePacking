@@ -1,0 +1,24 @@
+# Circle packing configuration (YAML)
+img_path: "./4x4_Kroma_16.png"          # Path to your JPG
+
+# Exactly six RGB colors, in the order you want regions reported
+user_colors:
+  - [178, 113, 14]   # Havana clear 502
+  - [7, 145, 176]     # Turquoise blue 595 
+  - [237, 48, 35]    # Poppy red 506
+  - [160, 32, 140]   # Violet 507
+  - [253, 184, 19]   # Cadmium yellow deep 553
+  - [20, 144, 89]    # Viridian 575
+    # - [0, 105, 170]    # Ultramarine 590
+    # - [89, 69, 57]     # Tobacco 501
+    # - [93, 64, 64]     # Winelees 503
+    # - [229, 14, 99]    # Bright red 505
+
+# Optional: six allowed diameters (px). If omitted, defaults are used.
+circle_sizes: [10, 30, 20, 50, 100, 150]
+
+# Optional output (width, height). Default is [1000, 1000].
+output_size: [1000, 1000]
+
+# Where to write the filled-circle visualization PNG
+visualization_outdir: "./circle_packing_outputs"
