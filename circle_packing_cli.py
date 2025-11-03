@@ -52,6 +52,38 @@ DRAW_LINE_TYPE = cv2.LINE_AA
 # otherwise use a greedy assignment (to avoid factorial blow-up).
 BRUTE_FORCE_LIMIT = 8
 
+# =========================
+# Preprocessing: mosaic labaling
+# =========================
+def mosaic_labels_by_user_colors(img_bgr: np.ndarray,
+                                 user_colors_bgr: List[Tuple[int,int,int]],
+                                 tile: int) -> np.ndarray:
+    """
+    Divide image into tile x tile cells.
+    For each cell, compute mean BGR and assign the cell to the nearest user color.
+    Return a label image (H x W) with values in [0, num_regions-1].
+    """
+    h, w = img_bgr.shape[:2]
+    num_regions = len(user_colors_bgr)
+    labels = np.empty((h, w), dtype=np.int32)
+
+    # Precomputed array for fast distance calculation
+    U = np.array(user_colors_bgr, dtype=np.float32)  # (num_regions, 3)
+
+    for y0 in range(0, h, tile):
+        y1 = min(y0 + tile, h)
+        for x0 in range(0, w, tile):
+            x1 = min(x0 + tile, w)
+            cell = img_bgr[y0:y1, x0:x1]
+            mean_bgr = cell.reshape(-1, 3).mean(axis=0).astype(np.float32)  # (3,)
+            # nearest user color (Euclidean in BGR)
+            diffs = U - mean_bgr[None, :]
+            dists = np.sqrt((diffs ** 2).sum(axis=1))
+            idx = int(np.argmin(dists))
+            labels[y0:y1, x0:x1] = idx
+    return labels
+
+
 
 # =========================
 # Utility helpers
@@ -294,7 +326,8 @@ def pack_circles_from_image(
     user_colors: List[Tuple[int, int, int]],
     circle_sizes: Optional[List[int]] = None,
     output_size: Tuple[int, int] = DEFAULT_OUTPUT_SIZE,
-    visualization_outdir: str = "./circle_packing_outputs"
+    visualization_outdir: str = "./circle_packing_outputs",
+    preprocess_cfg: Optional[Dict[str, Any]] = None   # <-- add this line
 ) -> Dict[str, Any]:
     try:
         announce("LOAD_IMAGE", {"img_path": img_path, "output_size": output_size})
@@ -324,19 +357,47 @@ def pack_circles_from_image(
         h, w = img.shape[:2]
         print("[OK] Image loaded & resized.")
 
-        # K-means quantization
-        announce("KMEANS_CLUSTERING", {"num_regions": num_regions, "pixels": h * w})
-        pixels = img.reshape(-1, 3).astype(np.float32)
-        try:
-            kmeans = KMeans(n_clusters=num_regions, n_init=KMEANS_N_INIT, random_state=KMEANS_RANDOM_STATE)
-            labels = kmeans.fit_predict(pixels)
-            centers = kmeans.cluster_centers_.astype(np.uint8)  # BGR
-        except Exception as e:
-            return {"error": f"K-means failed: {str(e)}"}
-        ensure_bool(len(np.unique(labels)) == num_regions,
-                    f"K-means did not produce {num_regions} distinct clusters.")
-        label_img = labels.reshape(h, w)
-        print("[OK] K-means produced expected clusters.")
+        # --- Optional mosaic pre-quantization ---
+        mode_cfg = preprocess_cfg or {}
+        mode = mode_cfg.get("mode", "none")
+        tile = int(mode_cfg.get("tile", 16))
+
+        if mode == "mosaic":
+            announce("PREPROCESS", {"mode": "mosaic", "tile": tile})
+            user_colors_bgr = [(c[2], c[1], c[0]) for c in user_colors]
+            label_img = mosaic_labels_by_user_colors(img, user_colors_bgr, tile)
+            num_regions = len(user_colors)  # already set earlier
+            centers = np.array(user_colors_bgr, dtype=np.uint8)  # “cluster centers” = user colors
+            print("[OK] Mosaic labels generated; skipping KMeans.")
+        else:
+            # (existing KMeans block stays as-is)
+            announce("KMEANS_CLUSTERING", {"num_regions": num_regions, "pixels": h * w})
+            pixels = img.reshape(-1, 3).astype(np.float32)
+            try:
+                kmeans = KMeans(n_clusters=num_regions, n_init=KMEANS_N_INIT, random_state=KMEANS_RANDOM_STATE)
+                labels = kmeans.fit_predict(pixels)
+                centers = kmeans.cluster_centers_.astype(np.uint8)  # BGR
+            except Exception as e:
+                return {"error": f"K-means failed: {str(e)}"}
+            ensure_bool(len(np.unique(labels)) == num_regions, f"K-means did not produce {num_regions} distinct clusters.")
+            label_img = labels.reshape(h, w)
+            print("[OK] K-means produced expected clusters.")
+
+# # comment out
+#         # K-means quantization
+#         announce("KMEANS_CLUSTERING", {"num_regions": num_regions, "pixels": h * w})
+#         pixels = img.reshape(-1, 3).astype(np.float32)
+#         try:
+#             kmeans = KMeans(n_clusters=num_regions, n_init=KMEANS_N_INIT, random_state=KMEANS_RANDOM_STATE)
+#             labels = kmeans.fit_predict(pixels)
+#             centers = kmeans.cluster_centers_.astype(np.uint8)  # BGR
+#         except Exception as e:
+#             return {"error": f"K-means failed: {str(e)}"}
+#         ensure_bool(len(np.unique(labels)) == num_regions,
+#                     f"K-means did not produce {num_regions} distinct clusters.")
+#         label_img = labels.reshape(h, w)
+#         print("[OK] K-means produced expected clusters.")
+# # comment out
 
         # Map clusters to user colors (nearest in Euclidean BGR space)
         announce("MAP_CLUSTERS_TO_USER_COLORS", {"method": "minimize total Euclidean distance"})

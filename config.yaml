@@ -25,3 +25,8 @@ output_size: [1000, 1000]
 
 # Where to write the filled-circle visualization PNG
 visualization_outdir: "./circle_packing_outputs"
+
+preprocess:
+  mode: mosaic      # options: mosaic | none (or omit for default)
+  tile: 16          # cell size in pixels (try 8–32)
+
