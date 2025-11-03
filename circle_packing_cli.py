@@ -98,7 +98,6 @@ def mosaic_labels_by_user_colors(img_bgr: np.ndarray,
     return labels
 
 
-
 # =========================
 # Utility helpers
 # =========================
@@ -201,7 +200,6 @@ def pack_region_with_circles_dt(mask: np.ndarray,
         print(f"[DT] diameter={d} placed={placed_this_d}")
 
     return circles
-
 
 
 # =========================
@@ -307,9 +305,6 @@ def write_layout_csv(
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
         w.writerows(rows)
-
-
-
 
 
 # =========================
@@ -463,13 +458,6 @@ def pack_circles_from_image(
             ensure_bool(isinstance(tup, (list, tuple)) and len(tup) == 3,
                         "Each user color must be a 3-tuple/list (R,G,B).")
 
-        # if circle_sizes is None:
-        #     circle_sizes = DEFAULT_CIRCLE_SIZES
-        # ensure_bool(isinstance(circle_sizes, list) and len(circle_sizes) >= 1,
-        #             "circle_sizes must be a non-empty list of diameters (ints).")
-
-    
-
         ensure_bool(isinstance(output_size, (list, tuple)) and len(output_size) == 2,
                     "output_size must be (width, height).")
 
@@ -572,15 +560,6 @@ def pack_circles_from_image(
                 print(f"[WARN] Removed {len(region_circles) - len(valid)} invalid circles after validation.")
             region_circles = valid
 
-            # # Visualization: FILLED circles + subtle outline
-            # bgr = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
-            # outline = tuple(int(v * DRAW_OUTLINE_DARKEN) for v in bgr)
-            # for c in region_circles:
-            #     center_xy = (c['center'][0], c['center'][1])
-            #     r = c['radius']
-            #     cv2.circle(packed_visual, center_xy, r, bgr, thickness=DRAW_FILLED_THICKNESS, lineType=DRAW_LINE_TYPE)
-            #     cv2.circle(packed_visual, center_xy, r, outline, thickness=DRAW_OUTLINE_THICKNESS, lineType=DRAW_LINE_TYPE)
-
             # Visualization: FILLED circles + subtle outline
             # existing colors for BGR drawing
             bgr     = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
@@ -679,13 +658,6 @@ def pack_circles_from_image(
                             "circle_size_counts entries must be (radius, count).")
         print("[OK] Output schema validated.")
 
-        # return {
-        #     "regions": all_regions_output,
-        #     "visualization": vis_path,
-        #     "visualization_type": "file",
-        #     "image_size": (int(w), int(h))
-        # }
-
         return {
             "regions": all_regions_output,
             "visualization": vis_path,
@@ -739,7 +711,6 @@ def main():
     except Exception as e:
         print(json.dumps({"error": f"Failed to read config: {e}"}))
         return
-
 
 # ********************************
     # after cfg = yaml.safe_load(...)
@@ -811,8 +782,6 @@ def main():
             visualization_outdir=render.outdir,
             preprocess_cfg=preprocess_cfg      # <-- must be passed in
         )
-# ********************************
-# ******************************* 
 
     # Convert tuples to lists for JSON printing
     def tuplify(o):
