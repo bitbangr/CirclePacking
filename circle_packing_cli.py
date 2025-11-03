@@ -101,6 +101,62 @@ def no_overlap(center: Tuple[int, int], radius: int, placed: List[Tuple[Tuple[in
                 return False
     return True
 
+import scipy.ndimage as ndi  # pip install scipy
+
+def pack_region_with_circles_dt(mask: np.ndarray,
+                                diameters: List[int]) -> List[Dict[str, Any]]:
+    """
+    High-density packing using distance transform (maximal discs).
+    For each diameter (largest→smallest):
+      - Compute distance to boundary of the *currently available* area.
+      - Place a circle where distance is maximal and ≥ radius.
+      - Carve the circle out of the available area and repeat.
+    Returns [{'center': (x,y), 'radius': r}, ...]
+    """
+    # Working availability mask (1 inside region and not yet occupied)
+    avail = (mask > 0).astype(np.uint8)
+
+    circles: List[Dict[str, Any]] = []
+
+    # Structuring element used to "carve out" placed circles
+    def carve_circle(a: np.ndarray, cx: int, cy: int, r: int):
+        cv2.circle(a, (cx, cy), r, 0, thickness=-1)
+
+    for d in sorted(set(int(x) for x in diameters if x > 1), reverse=True):
+        r = max(1, int(round(d / 2)))
+        placed_this_d = 0
+
+        # Loop until no space for this radius
+        while True:
+            if avail.max() == 0:
+                break
+
+            # Distance to the nearest zero (boundary); multiply by mask to zero-out outside
+            # Use Euclidean distance (pixels).
+            dt = cv2.distanceTransform(avail, distanceType=cv2.DIST_L2, maskSize=5)
+
+            # Find the best location (global maximum)
+            minVal, maxVal, minLoc, maxLoc = cv2.minMaxLoc(dt)
+            if maxVal < r:        # no place large enough for this radius
+                break
+
+            cx, cy = maxLoc       # OpenCV points are (x, y)
+            # Safety check: ensure the circle lies fully in avail (rounding guards)
+            if cy < 0 or cy >= dt.shape[0] or cx < 0 or cx >= dt.shape[1]:
+                break
+
+            # Record the circle
+            circles.append({'center': (int(cx), int(cy)), 'radius': int(r)})
+            placed_this_d += 1
+
+            # Carve out the circle (and a tiny buffer to avoid numerical edge touching)
+            carve_circle(avail, cx, cy, r)
+
+        print(f"[DT] diameter={d} placed={placed_this_d}")
+
+    return circles
+
+
 
 # =========================
 # Cluster-to-color assignment
@@ -321,7 +377,11 @@ def pack_circles_from_image(
         for idx, (mask, rgb_color) in enumerate(zip(region_masks, user_colors)):
             announce("PACK_REGION", {"region_index": idx, "allowed_diameters": diameters})
             region_edges = cv2.bitwise_and(edges, edges, mask=mask)
-            region_circles = pack_region_with_circles(mask, region_edges, diameters)
+           #  original packing code
+           #  region_circles = pack_region_with_circles(mask, region_edges, diameters)
+
+            region_circles = pack_region_with_circles_dt(mask, diameters)
+
 
             # Validate placements: inside bounds and within mask
             valid = []
