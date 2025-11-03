@@ -433,7 +433,8 @@ def pack_circles_from_image(
         # Circle packing per region (multi-diameter set)
         diameters = circle_sizes[:]  # allowed set for all regions
         all_regions_output: List[Dict[str, Any]] = []
-        packed_visual = img.copy()
+        packed_visual = img.copy()                     # existing (photo + circles)
+        packed_circles_only = np.zeros((h, w, 4), dtype=np.uint8)  # NEW: BGRA, fully transparent
 
         for idx, (mask, rgb_color) in enumerate(zip(region_masks, user_colors)):
             announce("PACK_REGION", {"region_index": idx, "allowed_diameters": diameters})
@@ -454,14 +455,35 @@ def pack_circles_from_image(
                 print(f"[WARN] Removed {len(region_circles) - len(valid)} invalid circles after validation.")
             region_circles = valid
 
+            # # Visualization: FILLED circles + subtle outline
+            # bgr = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
+            # outline = tuple(int(v * DRAW_OUTLINE_DARKEN) for v in bgr)
+            # for c in region_circles:
+            #     center_xy = (c['center'][0], c['center'][1])
+            #     r = c['radius']
+            #     cv2.circle(packed_visual, center_xy, r, bgr, thickness=DRAW_FILLED_THICKNESS, lineType=DRAW_LINE_TYPE)
+            #     cv2.circle(packed_visual, center_xy, r, outline, thickness=DRAW_OUTLINE_THICKNESS, lineType=DRAW_LINE_TYPE)
+
             # Visualization: FILLED circles + subtle outline
-            bgr = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
+            # existing colors for BGR drawing
+            bgr     = (int(rgb_color[2]), int(rgb_color[1]), int(rgb_color[0]))
             outline = tuple(int(v * DRAW_OUTLINE_DARKEN) for v in bgr)
+
+            # NEW: colors with alpha for the circles-only canvas
+            bgr_a     = (bgr[0],     bgr[1],     bgr[2],     255)
+            outline_a = (outline[0], outline[1], outline[2], 255)
+
             for c in region_circles:
                 center_xy = (c['center'][0], c['center'][1])
                 r = c['radius']
-                cv2.circle(packed_visual, center_xy, r, bgr, thickness=DRAW_FILLED_THICKNESS, lineType=DRAW_LINE_TYPE)
+
+                # 1) Draw on top of the original image (as you already do)
+                cv2.circle(packed_visual, center_xy, r, bgr,     thickness=DRAW_FILLED_THICKNESS, lineType=DRAW_LINE_TYPE)
                 cv2.circle(packed_visual, center_xy, r, outline, thickness=DRAW_OUTLINE_THICKNESS, lineType=DRAW_LINE_TYPE)
+
+                # 2) Draw on the transparent canvas (no photo background)
+                cv2.circle(packed_circles_only, center_xy, r, bgr_a,     thickness=DRAW_FILLED_THICKNESS, lineType=DRAW_LINE_TYPE)
+                cv2.circle(packed_circles_only, center_xy, r, outline_a, thickness=DRAW_OUTLINE_THICKNESS, lineType=DRAW_LINE_TYPE)
 
             # Summaries
             counts: Dict[int, int] = {}
@@ -490,6 +512,13 @@ def pack_circles_from_image(
         ok = cv2.imwrite(vis_path, packed_visual)
         ensure_bool(ok, "Failed to save visualization image.")
         print("[OK] Visualization saved.")
+
+        # NEW: circles-only (transparent PNG)
+        circles_only_path = os.path.join(visualization_outdir, f"packing_{uuid.uuid4().hex}_circles_only.png")
+        announce("SAVE_VISUALIZATION", {"path": circles_only_path, "type": "circles_only_bgra"})
+        ok2 = cv2.imwrite(circles_only_path, packed_circles_only)
+        ensure_bool(ok2, "Failed to save circles-only visualization.")
+        print(f"[OK] Circles-only visualization saved: {circles_only_path}")
 
         # Final structure validation
         announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
