@@ -308,6 +308,117 @@ def write_layout_csv(
 
 
 # =========================
+# SVG Export (mm-accurate)
+# =========================
+import xml.etree.ElementTree as ET
+
+def _sanitize_id(text: str) -> str:
+    s = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in (text or ""))
+    return s.strip("-") or "unnamed"
+
+def write_layout_svg(
+    svg_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    color_rgb_values: list[tuple[int,int,int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    grid_n: int,
+    boundary_epsilon: float,   # unused in SVG; kept for parity with CSV
+    mm_round_mode: str,
+    mm_round_step: float,
+    include_grid: bool = True,
+    transparent_bg: bool = False,
+    circle_stroke_mm: float = 0.2,
+) -> None:
+    # px -> mm scale
+    px_to_mm_x = board_w_mm / float(img_w)
+    px_to_mm_y = board_h_mm / float(img_h)
+
+    # Map exact RGB to name if available
+    name_map = {}
+    if color_names and len(color_names) >= len(color_rgb_values):
+        for rgb, nm in zip(color_rgb_values, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
+
+    # Root <svg> with physical size in mm + matching viewBox
+    svg = ET.Element(
+        "svg",
+        xmlns="http://www.w3.org/2000/svg",
+        version="1.1",
+        width=f"{board_w_mm}mm",
+        height=f"{board_h_mm}mm",
+        viewBox=f"0 0 {board_w_mm} {board_h_mm}",
+    )
+
+    # Optional background (keep transparent by default)
+    if not transparent_bg:
+        ET.SubElement(
+            svg, "rect",
+            x="0", y="0",
+            width=str(board_w_mm), height=str(board_h_mm),
+            fill="black"
+        )
+
+    # Optional grid overlay (A–J, 1–10)
+    if include_grid and grid_n > 0:
+        grid = ET.SubElement(svg, "g", id="grid", **{"stroke":"#888","stroke-width":"0.2","fill":"none","opacity":"0.35"})
+        # verticals
+        step_x = board_w_mm / float(grid_n)
+        for i in range(grid_n + 1):
+            x = i * step_x
+            ET.SubElement(grid, "line", x1=str(x), y1="0", x2=str(x), y2=str(board_h_mm))
+        # horizontals
+        step_y = board_h_mm / float(grid_n)
+        for j in range(grid_n + 1):
+            y = j * step_y
+            ET.SubElement(grid, "line", x1="0", y1=str(y), x2=str(board_w_mm), y2=str(y))
+        # labels (small)
+        labels = ET.SubElement(svg, "g", id="grid-labels", fill="#666", **{"font-size":"3"})
+        for i in range(grid_n):
+            x = i * step_x + 1.5
+            col = chr(ord('A') + i)
+            ET.SubElement(labels, "text", x=str(x), y="3.5").text = col
+        for j in range(grid_n):
+            y = j * step_y + 4.5
+            ET.SubElement(labels, "text", x="1.5", y=str(y)).text = str(j+1)
+
+    # Circles grouped by color
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        nm = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        gid = f"color-{_sanitize_id(nm)}"
+        grp = ET.SubElement(svg, "g", id=gid, fill=f"rgb({rgb[0]},{rgb[1]},{rgb[2]})", stroke="black", **{"stroke-width":str(circle_stroke_mm), "stroke-opacity":"0.35"})
+
+        # largest-first is nice for overlap ordering (already sorted in your pipeline)
+        for c in reg["circles"]:
+            cx_px, cy_px = c["center"]
+            r_px = int(c["radius"])
+            d_mm = (2 * r_px) * px_to_mm_x  # px are square; x-scale is fine
+
+            # Use your rounding policy to get integer/step mm in SVG too
+            # (reusing round_mm from your helpers)
+            from math import isfinite
+            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            r_mm  = round_mm(d_mm,             mm_round_mode, mm_round_step) / 2.0
+
+            el = ET.SubElement(grp, "circle",
+                               cx=str(cx_mm), cy=str(cy_mm), r=str(r_mm))
+            # embed a few data-* attrs to mirror CSV
+            el.set("data-rgb", f"[{rgb[0]},{rgb[1]},{rgb[2]}]")
+            el.set("data-name", nm)
+            el.set("data-d_mm", str(int(round(r_mm*2))))
+
+    # Write file
+    ET.ElementTree(svg).write(svg_path, encoding="utf-8", xml_declaration=True)
+
+    announce("WRITE_LAYOUT_SVG",{"svg_path":svg_path})
+
+
+# =========================
 # Cluster-to-color assignment
 # =========================
 def _distance_matrix_bgr(cluster_centers_bgr: np.ndarray, user_colors_bgr: List[Tuple[int, int, int]]) -> np.ndarray:
@@ -446,12 +557,25 @@ def pack_circles_from_image(
     visualization_outdir: str = "./circle_packing_outputs",
     preprocess_cfg: Optional[Dict[str, Any]] = None   # <-- add this line
 ) -> Dict[str, Any]:
+    
+    # UNPACK *immediately* — now these names exist in this scope
+    out_w_mm, out_h_mm = preprocess_cfg["__output_size_mm__"]
+    grid_divs        = int(preprocess_cfg["__grid_divisions__"])
+    boundary_epsilon = float(preprocess_cfg["__boundary_epsilon__"])
+    mm_round_mode    = str(preprocess_cfg["__mm_round_mode__"])
+    mm_round_step    = float(preprocess_cfg["__mm_round_step__"])
+    color_names      = preprocess_cfg.get("__color_names__", [])
+    export_svg       = bool(preprocess_cfg.get("__export_svg__", True))
+    svg_include_grid         = bool(preprocess_cfg.get("__svg_include_grid__", True))
+    svg_transparent  = bool(preprocess_cfg.get("__svg_transparent_bg__", True))
+    
     try:
         announce("LOAD_IMAGE", {"img_path": img_path, "output_size": output_size})
 
         # Validate inputs
         ensure_bool(isinstance(user_colors, list) and len(user_colors) >= 1,
                     "At least one user RGB color is required.")
+        
         num_regions = len(user_colors)
 
         for tup in user_colors:
@@ -467,9 +591,7 @@ def pack_circles_from_image(
         
         # *****************************
         # Respect final physical aspect ratio in mm, then resize to pixel canvas
-        if preprocess_cfg and "__output_size_mm__" in preprocess_cfg:
-            out_w_mm, out_h_mm = preprocess_cfg["__output_size_mm__"]
-            img = center_crop_to_aspect(img, out_w_mm, out_h_mm)
+        img = center_crop_to_aspect(img, out_w_mm, out_h_mm)
         # ******************************
         
         width, height = int(output_size[0]), int(output_size[1])
@@ -482,6 +604,7 @@ def pack_circles_from_image(
         mode = mode_cfg.get("mode", "none")
         tile = int(mode_cfg.get("tile", 16))
 
+        # mgj TODO check this logic.  mosaic was supposed to run AND THEN kmeans still done on this result
         if mode == "mosaic":
             announce("PREPROCESS", {"mode": "mosaic", "tile": tile})
             user_colors_bgr = [(c[2], c[1], c[0]) for c in user_colors]
@@ -626,15 +749,36 @@ def pack_circles_from_image(
             regions=all_regions_output,             # <-- use your computed circles
             img_w=w, img_h=h,
             user_colors=[(int(c[0]), int(c[1]), int(c[2])) for c in user_colors],
-            color_names=preprocess_cfg.get("__color_names__", None) if preprocess_cfg else None,
-            board_w_mm=preprocess_cfg["__output_size_mm__"][0],
-            board_h_mm=preprocess_cfg["__output_size_mm__"][1],
-            grid_n=int(preprocess_cfg.get("__grid_divisions__", 10)),
-            boundary_epsilon=float(preprocess_cfg.get("__boundary_epsilon__", 1e-9)),
-            mm_round_mode=str(preprocess_cfg.get("__mm_round_mode__", "nearest")),
-            mm_round_step=float(preprocess_cfg.get("__mm_round_step__", 1)),
+            color_names=color_names,
+            board_w_mm=out_w_mm,
+            board_h_mm=out_h_mm,
+            grid_n=grid_divs,
+            boundary_epsilon=boundary_epsilon,
+            mm_round_mode=mm_round_mode,
+            mm_round_step=mm_round_step,
         )
         print(f"[OK] CSV layout saved: {csv_path}")
+
+        # --- SVG export (mm-accurate) ---
+        if export_svg:
+            svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.svg")
+            write_layout_svg(
+                svg_path=svg_path,
+                regions=all_regions_output,            # your computed circles
+                img_w=w, img_h=h,
+                color_rgb_values=user_colors,     # (R,G,B) tuples
+                color_names=color_names,
+                board_w_mm=float(out_w_mm),
+                board_h_mm=float(out_h_mm),
+                grid_n=grid_divs,
+                boundary_epsilon=boundary_epsilon,
+                mm_round_mode=mm_round_mode,
+                mm_round_step=mm_round_step,
+                include_grid=svg_include_grid,
+                transparent_bg=svg_transparent,
+            )
+            print(f"[OK] SVG layout saved: {svg_path}")
+
 
         # Final structure validation
         announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
@@ -753,9 +897,9 @@ def main():
   
     # --- Extract user colors in {name, rgb} format ---
     # --- colors (strict {name,rgb}) ---
-    ucfg = cfg["user_colors"]
-    user_colors  = [tuple(int(v) for v in e["rgb"]) for e in ucfg]
-    color_names  = [str(e["name"]) for e in ucfg]
+    color_cfg = cfg["user_colors"]
+    user_colors  = [tuple(int(v) for v in e["rgb"]) for e in color_cfg]
+    color_names  = [str(e["name"]) for e in color_cfg]
 
     circle_sizes = cfg.get("circle_sizes", None)
     output_size_raw = cfg.get("output_size", list(DEFAULT_OUTPUT_SIZE))
@@ -772,6 +916,9 @@ def main():
             "__mm_round_mode__": mm_round_mode,
             "__mm_round_step__": mm_round_step,
             "__min_d_mm__": float(phys.get("min_circle_diameter_mm", 13)),
+            "__export_svg__": bool(cfg.get("export_svg", True)),
+            "__svg_include_grid__": bool(cfg.get("svg_include_grid", True)),
+            "__svg_transparent_bg__": bool(cfg.get("svg_transparent_bg", True)),
         }
 
     result = pack_circles_from_image(

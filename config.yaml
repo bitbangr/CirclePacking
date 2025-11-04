@@ -51,3 +51,7 @@ physical:
   mm_rounding:
     mode: nearest
     step_mm: 1
+
+export_svg: true
+svg_include_grid: true
+svg_transparent_bg: false
