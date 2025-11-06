@@ -306,6 +306,227 @@ def write_layout_csv(
         w.writeheader()
         w.writerows(rows)
 
+# =========================
+# SVG Placement Guide Helpers 
+# =========================
+import xml.etree.ElementTree as ET
+
+def _sanitize_id(text: str) -> str:
+    s = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in (text or ""))
+    return s.strip("-") or "unnamed"
+
+def _identifier(color_name: str, d_mm: float, seq: int) -> str:
+    # two decimals so 19.05 is preserved; replace '.' with '_' in label if you prefer
+    return f"{_sanitize_id(color_name)}_{d_mm:.2f}_{seq}"
+
+# =========================
+# Write Assembly Aid CSV
+# =========================
+def write_assembly_aid_csv(
+    csv_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    color_rgb_values: list[tuple[int, int, int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    mm_round_mode: str,
+    mm_round_step: float,
+) -> None:
+    import csv
+    px_to_mm_x = board_w_mm / float(img_w)
+    px_to_mm_y = board_h_mm / float(img_h)
+
+    # RGB -> color name map
+    name_map = {}
+    if color_names and len(color_names) >= len(color_rgb_values):
+        for rgb, nm in zip(color_rgb_values, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
+
+    counters: dict[tuple[str, float], int] = {}
+    rows = []
+
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        cname = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+
+        for c in reg["circles"]:
+            cx_px, cy_px = c["center"]
+            d_px = int(c["radius"]) * 2
+
+            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
+
+            key = (cname, float(d_mm))
+            counters[key] = counters.get(key, 0) + 1
+            ident = _identifier(cname, float(d_mm), counters[key])
+
+            rows.append({
+                "Color": cname,
+                "Diameter": float(d_mm),
+                "CenterX": float(cx_mm),
+                "CenterY": float(cy_mm),
+                "Identifier": ident,
+            })
+
+    # stable order: by color, then diameter desc, then X,Y
+    rows.sort(key=lambda r: (r["Color"], -r["Diameter"], r["CenterY"], r["CenterX"]))
+
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["Color", "Diameter", "CenterX", "CenterY", "Identifier"])
+        w.writeheader()
+        w.writerows(rows)
+
+# =========================
+# Write Assembly Aid SVG
+# =========================
+def write_assembly_aid_svg(
+    svg_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    color_rgb_values: list[tuple[int,int,int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    mm_round_mode: str,
+    mm_round_step: float,
+    arc_radius_mm: float = 2.0,
+    cross_stroke_mm: float = 0.6,
+    label_font_mm: float = 3.0,
+    label_offset_mm: float = 2.0,
+    make_black_background: bool = True,
+) -> None:
+    px_to_mm_x = board_w_mm / float(img_w)
+    px_to_mm_y = board_h_mm / float(img_h)
+
+    # RGB -> name
+    name_map = {}
+    if color_names and len(color_names) >= len(color_rgb_values):
+        for rgb, nm in zip(color_rgb_values, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
+
+    # counters for unique IDs
+    counters: dict[tuple[str, float], int] = {}
+
+    svg = ET.Element(
+        "svg",
+        xmlns="http://www.w3.org/2000/svg",
+        version="1.1",
+        width=f"{board_w_mm}mm",
+        height=f"{board_h_mm}mm",
+        viewBox=f"0 0 {board_w_mm} {board_h_mm}",
+    )
+
+    if make_black_background:
+        ET.SubElement(svg, "rect", x="0", y="0",
+                      width=str(board_w_mm), height=str(board_h_mm),
+                      fill="black")
+
+    def arc_path(cx, cy, dx, dy, r):
+        # small arc centered at (cx+dx, cy+dy) oriented outward
+        # draw as 180-degree small arc (symmetric end cap)
+        x0 = cx + dx - r
+        y0 = cy + dy
+        x1 = cx + dx + r
+        y1 = cy + dy
+        # sweep-flag flips visually the same for semicircle; keep 0
+        return f"M {x0:.3f} {y0:.3f} A {r:.3f} {r:.3f} 0 0 1 {x1:.3f} {y1:.3f}"
+
+    # per-color layers
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        cname = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        color_str = f"rgb({rgb[0]},{rgb[1]},{rgb[2]})"
+
+        layer_cross = ET.SubElement(
+            svg, "g",
+            **{
+                "id": f"layer-crosses-{_sanitize_id(cname)}",
+                "inkscape:groupmode": "layer",
+                "inkscape:label": f"Crosses – {cname}",
+                "fill": "none",
+                "stroke": color_str,
+                "stroke-width": str(cross_stroke_mm),
+                "stroke-linecap": "round"
+            }
+        )
+        layer_labels = ET.SubElement(
+            svg, "g",
+            **{
+                "id": f"layer-labels-{_sanitize_id(cname)}",
+                "inkscape:groupmode": "layer",
+                "inkscape:label": f"Labels – {cname}",
+                "fill": color_str
+            }
+        )
+
+        for c in reg["circles"]:
+            cx_px, cy_px = c["center"]
+            d_px = int(c["radius"]) * 2
+
+            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
+            r_mm  = d_mm / 2.0
+
+            # unique identifier per (color, diameter)
+            key = (cname, float(d_mm))
+            counters[key] = counters.get(key, 0) + 1
+            ident = _identifier(cname, float(d_mm), counters[key])
+
+            # cross lines (full diameter)
+            # horizontal
+            ET.SubElement(layer_cross, "line",
+                          x1=str(cx_mm - r_mm), y1=str(cy_mm),
+                          x2=str(cx_mm + r_mm), y2=str(cy_mm))
+            # vertical
+            ET.SubElement(layer_cross, "line",
+                          x1=str(cx_mm), y1=str(cy_mm - r_mm),
+                          x2=str(cx_mm), y2=str(cy_mm + r_mm))
+
+            # # arc tips at each end (four semicircles pointing outward)
+            # ar = min(arc_radius_mm, max(0.5, r_mm*0.08))  # cap at ~8% of radius, min 0.5mm
+            # # right, left, top, bottom
+            # ET.SubElement(layer_cross, "path", d=arc_path(cx_mm, cy_mm, +r_mm, 0.0, ar))
+            # ET.SubElement(layer_cross, "path", d=arc_path(cx_mm, cy_mm, -r_mm, 0.0, ar))
+            # ET.SubElement(layer_cross, "path", d=arc_path(cx_mm, cy_mm, 0.0, -r_mm, ar))
+            # ET.SubElement(layer_cross, "path", d=arc_path(cx_mm, cy_mm, 0.0, +r_mm, ar))
+
+            # --- Tick marks at cross-arm ends (short perpendicular lines) ---
+            tick_len = min(arc_radius_mm, max(0.5, r_mm * 0.08))  # reuse same scale
+            # right end
+            ET.SubElement(layer_cross, "line",
+                        x1=str(cx_mm + r_mm), y1=str(cy_mm - tick_len),
+                        x2=str(cx_mm + r_mm), y2=str(cy_mm + tick_len))
+            # left end
+            ET.SubElement(layer_cross, "line",
+                        x1=str(cx_mm - r_mm), y1=str(cy_mm - tick_len),
+                        x2=str(cx_mm - r_mm), y2=str(cy_mm + tick_len))
+            # top end
+            ET.SubElement(layer_cross, "line",
+                        x1=str(cx_mm - tick_len), y1=str(cy_mm - r_mm),
+                        x2=str(cx_mm + tick_len), y2=str(cy_mm - r_mm))
+            # bottom end
+            ET.SubElement(layer_cross, "line",
+                        x1=str(cx_mm - tick_len), y1=str(cy_mm + r_mm),
+                        x2=str(cx_mm + tick_len), y2=str(cy_mm + r_mm))
+
+
+            # label (own layer), centered then nudged down a bit
+            ET.SubElement(layer_labels, "text",
+                          x=str(cx_mm), y=str(cy_mm + label_offset_mm),
+                          **{
+                              "font-size": f"{label_font_mm}mm",
+                              "text-anchor": "middle",
+                              "dominant-baseline": "middle"
+                          }).text = ident
+
+    ET.ElementTree(svg).write(svg_path, encoding="utf-8", xml_declaration=True)
+
+
 
 # =========================
 # SVG Export (mm-accurate)
@@ -778,6 +999,46 @@ def pack_circles_from_image(
                 transparent_bg=svg_transparent,
             )
             print(f"[OK] SVG layout saved: {svg_path}")
+
+
+            # --- Assembly-aid CSV ---
+            aid_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.csv")
+            write_assembly_aid_csv(
+                csv_path=aid_csv_path,
+                regions=all_regions_output,
+                img_w=w, img_h=h,
+                color_rgb_values=user_colors,
+                color_names=color_names,
+                board_w_mm=float(out_w_mm), board_h_mm=float(out_h_mm),
+                mm_round_mode=mm_round_mode, mm_round_step=mm_round_step,
+            )
+            print(f"[OK] Assembly CSV saved: {aid_csv_path}")
+
+            # --- Assembly-aid SVG ---
+            aid_svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.svg")
+            write_assembly_aid_svg(
+                svg_path=aid_svg_path,
+                regions=all_regions_output,
+                img_w=w, img_h=h,
+                color_rgb_values=user_colors,
+                color_names=color_names,
+                board_w_mm=float(out_w_mm), board_h_mm=float(out_h_mm),
+                mm_round_mode=mm_round_mode, mm_round_step=mm_round_step,
+                arc_radius_mm=2.0,           # tweak if you like
+                cross_stroke_mm=0.6,
+                label_font_mm=3.0,
+                label_offset_mm=2.0,
+                make_black_background=True,  # solid base for print
+            )
+            print(f"[OK] Assembly SVG saved: {aid_svg_path}")
+
+            # include in result dict
+            result_paths = {
+                "assembly_csv": aid_csv_path,
+                "assembly_svg": aid_svg_path,
+            }
+
+
 
 
         # Final structure validation
