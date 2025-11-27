@@ -45,9 +45,9 @@ Outputs per run
   - packing_<ID>.png                (overlay: original/cropped image + circles)
   - packing_<ID>_circles_only.png   (circles drawn on black)
   - packing_<ID>_layout.csv         (grid_cell, position_in_mm, diameter_in_mm, color_rgb, color_name)
-and prints a JSON summary to stdout (optionally pretty).
-"""
 
+  and prints a JSON summary to stdout (optionally pretty).
+"""
 
 from __future__ import annotations
 import argparse, json, os, uuid, math
@@ -190,13 +190,23 @@ import scipy.ndimage as ndi  # pip install scipy
 def pack_region_with_circles_dt(mask: np.ndarray,
                                 diameters: List[int]) -> List[Dict[str, Any]]:
     """
-    High-density packing using distance transform (maximal discs).
-    For each diameter (largest→smallest):
-      - Compute distance to boundary of the *currently available* area.
-      - Place a circle where distance is maximal and ≥ radius.
-      - Carve the circle out of the available area and repeat.
-    Returns [{'center': (x,y), 'radius': r}, ...]
+    High-density packing using a distance transform. (maximal discs).
+
+    For each diameter (largest → smallest), the algorithm:
+
+      * computes the distance to the boundary of the currently available area
+      * places a circle where the distance is maximal and at least (≥) the radius
+      * carves the circle out of the available area and repeats
+
+    Args:
+        mask: Binary mask of the region to fill (non-zero inside).
+        diameters: List of candidate circle diameters in pixels.
+
+    Returns:
+        A list of circle dictionaries with keys ``"center"`` (x, y) and
+        ``"radius"`` in pixels.
     """
+
     # Working availability mask (1 inside region and not yet occupied)
     avail = (mask > 0).astype(np.uint8)
 
@@ -834,13 +844,25 @@ def candidate_points_for_region(mask: np.ndarray, edge_map: np.ndarray, max_samp
 # =========================
 def pack_region_with_circles(mask: np.ndarray, edge_map: np.ndarray, diameters: List[int]) -> List[Dict[str, Any]]:
     """
-    Greedy multi-diameter packing:
-      1) Generate candidates prioritized by edges & centroid.
-      2) For each diameter (largest→smallest), place circles if:
-         - Entirely inside mask (containment sampling)
-         - No overlap with previously placed circles
-    Returns list of circle dicts: {'center': (x,y), 'radius': r}
+    Greedy multi-diameter circle packing.
+
+    For each diameter (largest → smallest), the algorithm places circles if:
+
+      * generates candidate positions based on edges and region centroid
+      * keeps candidates that are entirely inside the mask (containment sampling)
+      * rejects candidates that overlap previously placed circles
+
+    Args:
+        mask: Binary mask of the region to fill (non-zero inside).
+        edge_map: Edge map used to prioritize candidate positions.
+        diameters: List of candidate circle diameters in pixels.
+
+    Returns:
+        A list of circle dicts: {'center': (x,y), 'radius': r}
+        keys ``"center"`` (x, y) 
+        values ``"radius"`` r in pixels.
     """
+    
     circles = []
     placed = []  # list of ((x,y), radius)
     candidates = candidate_points_for_region(mask, edge_map, max_samples=CANDIDATE_MAX_SAMPLES)
