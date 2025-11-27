@@ -1,6 +1,12 @@
 API Reference
 =============
 
+Module Overview
+---------------
+
+.. automodule:: circle_packing_cli
+   :no-members:
+
 High-level entry points
 -----------------------
 
