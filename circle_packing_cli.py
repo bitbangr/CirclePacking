@@ -1,28 +1,53 @@
 #!/usr/bin/env python3
 
-""" 
-circle_packing_cli.py 
-
+"""
 CLI tools for generating circle-packing layouts from an input image.
 
 This module loads an image, computes a circle-packing solution within a
 physical board size, exports diagnostic PNGs, writes a CSV layout, and
 optionally creates an SVG accurate to millimeter scaling.
 
-Typical usage:
+Overview
+--------
+This module implements the full pipeline:
+
+1. Load and center-crop the input image to the desired physical aspect ratio.
+2. Quantize or cluster image colors and map them to the user-defined palette.
+3. For each color region, compute a circle-packing layout that respects:
+   - the physical board size (millimeters)
+   - the allowed circle diameters (millimeters)
+   - a grid resolution for indexing and assembly.
+4. Export:
+   - diagnostic PNG overlays
+   - a millimeter-accurate CSV layout
+   - an optional SVG layout and assembly-aid files.
+
+Key entry points
+----------------
+- ``pack_circles_from_image``: run the full pipeline from Python.
+- ``main``: command-line entry point used by the CLI script.
+
+Extension points
+----------------
+A developer can experiment with:
+
+- alternative packing algorithms by swapping out
+  ``pack_region_with_circles`` / ``pack_region_with_circles_dt``
+- different color quantization or palette-mapping
+- custom exporters based on the CSV/SVG layout data.
+
+Typical usage
+-------------
     $ python3 circle_packing_cli.py input.jpg --config config.json
 
-The public entry point is :func:`main`.
-
-Generates a circle-packed representation and a build CSV from an input image,
-respecting a physical board size (mm), circle size set (mm), and color palette.
-
-Outputs per run:
+Outputs per run
+---------------
   - packing_<ID>.png                (overlay: original/cropped image + circles)
   - packing_<ID>_circles_only.png   (circles drawn on black)
   - packing_<ID>_layout.csv         (grid_cell, position_in_mm, diameter_in_mm, color_rgb, color_name)
 and prints a JSON summary to stdout (optionally pretty).
 """
+
 
 from __future__ import annotations
 import argparse, json, os, uuid, math
