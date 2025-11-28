@@ -45,8 +45,10 @@ Outputs per run
   - packing_<ID>.png                (overlay: original/cropped image + circles)
   - packing_<ID>_circles_only.png   (circles drawn on black)
   - packing_<ID>_layout.csv         (grid_cell, position_in_mm, diameter_in_mm, color_rgb, color_name)
-  - packing_<ID>_assembly.csv       (update me)
-  - packing_<ID>_assembly.svg       (update me)    
+  - packing_<ID>_assembly.csv       (csv file listing each circle -> Color, Diameter, CenterX, CenterY, and Identifier) 
+    
+        for example Bright red 505,	50.0,	278.0,	277.0,	Bright-red-505_50.00_2
+  - packing_<ID>_assembly.svg       (assembly aid with center cross marks, diameter marks and lables for each circle)    
   - packing_<ID>_layout.svg         (SVG file for laser cutting and assembly aid)   
 
 
