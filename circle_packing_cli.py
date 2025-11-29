@@ -397,11 +397,14 @@ def _identifier(color_name: str, d_mm: float, seq: int) -> str:
     # two decimals so 19.05 is preserved; replace '.' with '_' in label if you prefer
     return f"{_sanitize_id(color_name)}_{d_mm:.2f}_{seq}"
 
+from typing import Optional
+
 # =========================
 # Write Assembly Aid CSV
 # =========================
 def write_assembly_aid_csv(
     csv_path: str,
+    summary_csv_path: str,
     regions: list[dict],
     img_w: int,
     img_h: int,
@@ -412,22 +415,43 @@ def write_assembly_aid_csv(
     mm_round_mode: str,
     mm_round_step: float,
 ) -> None:
+    """
+    Assembly CSV:
+      Color, Diameter, CenterX, CenterY, Identifier
+
+    Summary CSV (if summary_csv_path is not None):
+      Color, <diameter_1>, <diameter_2>, ..., Total
+
+    Diameters in the summary are taken directly from the per-row CSV,
+    so the two files always stay consistent.
+    """
     import csv
+
     px_to_mm_x = board_w_mm / float(img_w)
     px_to_mm_y = board_h_mm / float(img_h)
 
     # RGB -> color name map
-    name_map = {}
+    name_map: dict[tuple[int, int, int], str] = {}
     if color_names and len(color_names) >= len(color_rgb_values):
         for rgb, nm in zip(color_rgb_values, color_names):
             name_map[tuple(int(v) for v in rgb)] = nm
 
+    # Keep colour order from config
+    colors_in_order: list[str] = [
+        name_map.get(tuple(int(v) for v in rgb), f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        for rgb in color_rgb_values
+    ]
+
     counters: dict[tuple[str, float], int] = {}
-    rows = []
+    rows: list[dict] = []
+    # For summary: color -> diameter -> count
+    summary_counts: dict[str, dict[float, int]] = {}
 
     for reg in regions:
         rgb = tuple(int(v) for v in reg["color"])
         cname = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        if cname not in summary_counts:
+            summary_counts[cname] = {}
 
         for c in reg["circles"]:
             cx_px, cy_px = c["center"]
@@ -436,26 +460,50 @@ def write_assembly_aid_csv(
             cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
             cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
             d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
+            d_mm_f = float(d_mm)
 
-            key = (cname, float(d_mm))
+            key = (cname, d_mm_f)
             counters[key] = counters.get(key, 0) + 1
-            ident = _identifier(cname, float(d_mm), counters[key])
+            ident = _identifier(cname, d_mm_f, counters[key])
 
             rows.append({
                 "Color": cname,
-                "Diameter": float(d_mm),
+                "Diameter": d_mm_f,
                 "CenterX": float(cx_mm),
                 "CenterY": float(cy_mm),
                 "Identifier": ident,
             })
 
-    # stable order: by color, then diameter desc, then X,Y
+            summary_counts[cname][d_mm_f] = summary_counts[cname].get(d_mm_f, 0) + 1
+
+    # Sort rows: by color, then diameter desc, then Y,X
     rows.sort(key=lambda r: (r["Color"], -r["Diameter"], r["CenterY"], r["CenterX"]))
 
+    # ---- Write assembly CSV (per-circle) ----
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["Color", "Diameter", "CenterX", "CenterY", "Identifier"])
         w.writeheader()
         w.writerows(rows)
+
+    # ---- Optional summary CSV (per-color × per-diameter) ----
+    if summary_csv_path is not None:
+        # Collect all diameters actually used in the rows
+        all_diams = sorted({r["Diameter"] for r in rows}, reverse=True)
+
+        # Header: Color, <diam_1>, <diam_2>, ..., Total
+        headers = ["Color"] + [f"{d:.2f}" for d in all_diams] + ["Total"]
+
+        with open(summary_csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(headers)
+
+            # row order: colours from config, then any extras
+            extra_colors = [c for c in summary_counts.keys() if c not in colors_in_order]
+            for cname in colors_in_order + extra_colors:
+                counts_for_color = summary_counts.get(cname, {})
+                vals = [counts_for_color.get(d, 0) for d in all_diams]
+                w.writerow([cname, *vals, sum(vals)])
+
 
 # =========================
 # Write Assembly Aid SVG
@@ -1121,8 +1169,10 @@ def pack_circles_from_image(
 
             # --- Assembly-aid CSV ---
             aid_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.csv")
+            aid_summary_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly_summary.csv")
             write_assembly_aid_csv(
                 csv_path=aid_csv_path,
+                summary_csv_path=aid_summary_csv_path,
                 regions=all_regions_output,
                 img_w=w, img_h=h,
                 color_rgb_values=user_colors,
@@ -1154,6 +1204,7 @@ def pack_circles_from_image(
             result_paths = {
                 "assembly_csv": aid_csv_path,
                 "assembly_svg": aid_svg_path,
+                "summary_csv_path": aid_summary_csv_path,
             }
 
 
