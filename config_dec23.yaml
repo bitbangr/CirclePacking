@@ -1,0 +1,57 @@
+# Circle packing configuration (YAML)
+# img_path: "./images/4x4_Kroma_16.png"          # Path to your JPG
+img_path: "./images/Self_Portrait_Mar17.jpeg" 
+
+ # Color palette used for packing and CSV
+user_colors:
+  - name: "Havana clear 502"
+    rgb: [178, 113, 14]
+  - name: "Turquoise blue 595"
+    rgb: [7, 145, 176]
+  - name: "Poppy red 506"
+    rgb: [237, 48, 35]
+  - name: "Violet 507"
+    rgb: [160, 32, 140]
+  - name: "Cadmium yellow deep 553"
+    rgb: [253, 184, 19]
+  - name: "Viridian 575"
+    rgb: [20, 144, 89]
+  - name: "Ultramarine 590"
+    rgb: [0, 105, 170]
+  - name: "Tobacco 501"
+    rgb: [89, 69, 57]
+  - name: "Winelees 503"
+    rgb: [93, 64, 64]
+  - name: "Bright red 505"
+    rgb: [229, 14, 99]
+
+
+# Allowed circle diameters (millimeters)
+circle_sizes_mm: [152.4, 101.6, 76.2, 50.8, 38.1, 25.4, 19.05, 13,7]
+
+# Optional: six allowed diameters (px). If omitted, defaults are used.
+# circle_sizes: [10, 30, 20, 50, 100, 150]
+# circle_sizes: [150, 100, 64, 48, 32, 24, 16, 12, 8, 6, 4]
+
+# Optional output (width, height). Default is [1000, 1000].
+output_size: [752, 1000]
+
+# Where to write the filled-circle visualization PNG
+visualization_outdir: "./circle_packing_outputs"
+
+preprocess:
+  mode: mosaic      # options: mosaic | none (or omit for default)
+  tile: 16          # cell size in pixels (try 8–32)
+
+physical:
+  output_size_mm: [611.2, 812.8]   # width, height in mm
+  min_circle_diameter_mm: 6
+  grid_divisions: 10
+  boundary_epsilon: 1e-9
+  mm_rounding:
+    mode: nearest
+    step_mm: 1
+
+export_svg: true
+svg_include_grid: true
+svg_transparent_bg: false
