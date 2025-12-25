@@ -265,6 +265,45 @@ CSV_FIELDS = ["grid_cell","position_in_mm","diameter_in_mm","color_rgb","color_n
 ROUND_MODES = {"nearest","floor","ceil"}
 
 def center_crop_to_aspect(img, target_w_mm: float, target_h_mm: float):
+    """
+    Center-crop an image to match a target aspect ratio.
+
+    The target aspect ratio is computed as ``target_w_mm / target_h_mm``.
+    The function crops the image *without resizing*, removing pixels equally
+    from opposite sides so the crop remains centered.
+
+    If the current aspect ratio already matches the target (within a small
+    floating-point tolerance), the input image is returned unchanged.
+
+    Args:
+        img: Image array with shape ``(H, W)`` or ``(H, W, C)``. Typically a
+            NumPy array (e.g., an OpenCV image).
+        target_w_mm: Target width in millimeters (only the ratio matters).
+        target_h_mm: Target height in millimeters (only the ratio matters).
+
+    Returns:
+        The center-cropped image as a view into ``img`` (same dtype). The output
+        has the same height or width as the input, and an aspect ratio matching
+        ``target_w_mm / target_h_mm``.
+
+    Notes:
+        * This function returns a NumPy slice (a view), not a copy.
+        * Rounding is used when computing the new pixel width/height, so the
+          resulting aspect ratio is as close as possible in integer pixels.
+
+    Raises:
+        ZeroDivisionError: If ``target_h_mm`` is 0.
+        ValueError: If ``img`` does not have at least 2 dimensions.
+
+    Examples:
+        Crop a landscape image to a 4:3 aspect ratio::
+
+            cropped = center_crop_to_aspect(img, 4.0, 3.0)
+
+        Crop to A4 paper aspect ratio (same units)::
+
+            cropped = center_crop_to_aspect(img, 210.0, 297.0)
+    """
     h, w = img.shape[:2]
     tgt = float(target_w_mm) / float(target_h_mm)
     cur = float(w) / float(h)
@@ -847,9 +886,40 @@ def map_clusters_to_user_colors(cluster_centers_bgr: np.ndarray,
 # =========================
 def candidate_points_for_region(mask: np.ndarray, edge_map: np.ndarray, max_samples: int = CANDIDATE_MAX_SAMPLES) -> np.ndarray:
     """
-    Candidate (x,y) points prioritized near edges and spread across region.
-    - EDGE_SAMPLE_FRACTION: points near edges (dilated Canny)
-    - GRID_SAMPLE_FRACTION: cap for blue-noise-like grid over the region interior
+    Candidate point generation for a masked region (edge-aware sampling).
+
+    Generate candidate (x, y) points inside a masked region, biased toward edges for 
+    use in circle placement or other spatial sampling tasks. Points favor region boundaries
+    while still covering the interior.
+
+    Candidates are drawn from three sources, in order of priority:
+
+        * Region centroid, to ensure a stable interior seed.
+        * Edge-adjacent points, derived from a dilated edge map.
+        * Interior grid points sampled from a regular grid whose stride adapts
+            to image area and the sample budget.
+
+    Edge and grid points are randomly subsampled to respect ``max_samples``.
+    The final list is shuffled to avoid ordering bias.
+
+    Args:
+        mask:
+            Binary region mask (non-zero values indicate valid interior pixels).
+        edge_map:
+            Binary edge image (e.g., from Canny) aligned with ``mask``.
+            Used only to bias candidate selection toward boundaries.
+        max_samples:
+            Upper bound on the number of candidate points returned.
+
+    Returns:
+        A NumPy array of shape (N, 2) containing integer (x, y) coordinates
+        inside the masked region.
+
+    Notes:
+        - Edge dilation improves robustness to thin or broken edges.
+        - Grid stride scales with image size and sample budget.
+        - Results are nondeterministic unless the RNG is seeded.
+        - Coordinates are returned as (x, y), not (row, col).
     """
     h, w = mask.shape
 
