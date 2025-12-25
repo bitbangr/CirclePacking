@@ -2,7 +2,7 @@
 # img_path: "./images/4x4_Kroma_16.png"          # Path to your JPG
 img_path: "./images/Self_Portrait_Mar17.jpeg" 
 
- # Color palette used for packing and CSV
+ # Color palette used for packing and CSV - Based on Mi-Tiente Canson paper colors
 user_colors:
   - name: "Havana clear 502"
     rgb: [178, 113, 14]
