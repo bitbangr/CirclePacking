@@ -1,0 +1,123 @@
+# Circle packing configuration (YAML)
+# img_path: "./images/4x4_Kroma_16.png"          # Path to your JPG
+img_path: "./images/Self_Portrait_Mar17.jpeg" 
+
+# Color palette used for packing and CSV - Based on Kroma Paints
+user_colors:
+  - name: "Hansa Light Yellow"
+    rgb: [245, 232, 18]
+  - name: "Cadmium Light Yellow"
+    rgb: [245, 231, 11]
+  - name: "Benzi Yellow"
+    rgb: [245, 231, 14]
+  - name: "Hansa Med. Yellow"
+    rgb: [246, 227, 9]
+  - name: "Cadmium Med. Yellow"
+    rgb: [249, 205, 18]
+  - name: "Nickel Azo Yellow"
+    rgb: [185, 114, 41]
+  - name: "Arylide Yellow"
+    rgb: [247, 152, 32]
+  - name: "Cadmium Orange"
+    rgb: [243, 116, 35]
+  - name: "Benzi Orange"
+    rgb: [240, 84, 37]
+  - name: "Cadmium Med. Red"
+    rgb: [229, 31, 37]
+  - name: "Naphthol Light Red"
+    rgb: [201, 33, 40]
+  - name: "Naphthol Med. Red"
+    rgb: [167, 30, 35]
+  - name: "Cadmium Dark Red"
+    rgb: [173, 30, 35]
+  - name: "Quinacridone Red"
+    rgb: [183, 33, 39]
+  - name: "Benzi Burnt Orange"
+    rgb: [117, 19, 24]
+  - name: "Quinacridone Violet"
+    rgb: [82, 19, 31]
+  - name: "Quinacridone Magenta"
+    rgb: [161, 28, 71]
+  - name: "Ultramarine Violet"
+    rgb: [68, 76, 159]
+  - name: "Dioxazine Violet"
+    rgb: [13, 16, 16]
+  - name: "Paynes's Grey"
+    rgb: [7, 8, 10]
+  - name: "Ultramarine Blue"
+    rgb: [45, 54, 147]
+  - name: "Cobalt Blue"
+    rgb: [40, 49, 137]
+  - name: "Cerulean Blue"
+    rgb: [30, 54, 105]
+  - name: "Cobalt Teal"
+    rgb: [23, 147, 173]
+  - name: "Phthalo Blue"
+    rgb: [31, 27, 79]
+  - name: "Phthalo Green"
+    rgb: [8, 29, 34]
+  - name: "Permanent Green"
+    rgb: [24, 159, 72]
+  - name: "Chromium Oxide Green"
+    rgb: [41, 115, 56]
+  - name: "Sap Green"
+    rgb: [34, 35, 31]
+  - name: "Yellow Oxide"
+    rgb: [178, 137, 45]
+  - name: "Tnspnt Yellow Oxide"
+    rgb: [218, 133, 40]
+  - name: "Raw Sienna"
+    rgb: [131, 86, 35]
+  - name: "Transparent Red Oxide"
+    rgb: [127, 39, 24]
+  - name: "Burnt Sienna"
+    rgb: [116, 63, 27]
+  - name: "Red Oxide"
+    rgb: [115, 36, 21]
+  - name: "Alizarin Crimson Hue"
+    rgb: [103, 15, 24]
+  - name: "Violet Oxide"
+    rgb: [97, 25, 26]
+  - name: "Burnt Umber"
+    rgb: [58, 24, 24]
+  - name: "Raw Umber"
+    rgb: [36, 26, 27]
+  - name: "Vancouver Grey"
+    rgb: [109, 97, 91]
+  - name: "Raw Titanium"
+    rgb: [199, 174, 145]
+  - name: "Iridescent Gold"
+    rgb: [209, 147, 70]
+  - name: "Pearlescent White"
+    rgb: [220, 214, 210]
+
+
+# Allowed circle diameters (millimeters)
+circle_sizes_mm: [152.4, 101.6, 76.2, 50.8, 38.1, 25.4, 19.05, 13,7]
+
+# Optional: six allowed diameters (px). If omitted, defaults are used.
+# circle_sizes: [10, 30, 20, 50, 100, 150]
+# circle_sizes: [150, 100, 64, 48, 32, 24, 16, 12, 8, 6, 4]
+
+# Optional output (width, height). Default is [1000, 1000].
+output_size: [752, 1000]
+
+# Where to write the filled-circle visualization PNG
+visualization_outdir: "./circle_packing_outputs"
+
+preprocess:
+  mode: mosaic      # options: mosaic | none (or omit for default)
+  tile: 16          # cell size in pixels (try 8–32)
+
+physical:
+  output_size_mm: [611.2, 812.8]   # width, height in mm
+  min_circle_diameter_mm: 6
+  grid_divisions: 10
+  boundary_epsilon: 1e-9
+  mm_rounding:
+    mode: nearest
+    step_mm: 1
+
+export_svg: true
+svg_include_grid: true
+svg_transparent_bg: false
