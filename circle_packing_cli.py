@@ -1047,13 +1047,13 @@ def write_layout_svg(
             cy_mm = cy_px * scale
             r_mm  = r_px  * scale
 
-
-            print(
-            f"cx_px={cx_px}, cy_px={cy_px}, r_px={r_px} | "
-            f"scale={scale} | "
-            f"cx_mm={cx_mm}, cy_mm={cy_mm}, r_mm={r_mm} | "
-            f"gid={gid}"
-        )
+            #debug code for SVG circle overlapping placement issues
+        #     print(
+        #     f"cx_px={cx_px}, cy_px={cy_px}, r_px={r_px} | "
+        #     f"scale={scale} | "
+        #     f"cx_mm={cx_mm}, cy_mm={cy_mm}, r_mm={r_mm} | "
+        #     f"gid={gid}"
+        # )
 
             el = ET.SubElement(grp, "circle",
                                cx=str(cx_mm), cy=str(cy_mm), r=str(r_mm))
