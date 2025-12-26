@@ -63,10 +63,6 @@ import cv2
 from sklearn.cluster import KMeans
 from itertools import permutations
 import yaml
-from pathlib import Path
-from dataclasses import dataclass
-import re
-from datetime import datetime
 
 # =========================
 # Configurable constants
@@ -111,113 +107,6 @@ DRAW_LINE_TYPE = cv2.LINE_AA
 # For num_regions <= BRUTE_FORCE_LIMIT, use exact (permutation) assignment;
 # otherwise use a greedy assignment (to avoid factorial blow-up).
 BRUTE_FORCE_LIMIT = 8
-
-@dataclass(frozen=True)
-class OutputContext:
-    """
-    Naming and location context for all outputs produced by a single run.
-
-    Fields:
-      - output_root: Root output directory (existing top-level output folder).
-      - day_str: Local date string YYYYMMDD.
-      - day_dir: Directory for this day: output_root / day_str.
-      - run_n: Per-day incrementing run counter (1, 2, 3...).
-      - run_prefix: Filename prefix:
-            NNN__YYYYMMDD__output_name_slug__image_stem
-    """
-    output_root: Path
-    day_str: str
-    day_dir: Path
-    run_n: int
-    run_prefix: str
-
-    def outpath(self, artifact: str, ext: str) -> Path:
-        """
-        Build a fully-labeled output path:
-
-          out/YYYYMMDD/NNN__YYYYMMDD__slug__image__artifact.ext
-        """
-        artifact_slug = slugify(artifact, max_len=48)
-        ext = ext.lstrip(".")
-        return self.day_dir / f"{self.run_prefix}__{artifact_slug}.{ext}"
-
-
-def make_output_context(
-    output_root: str | Path,
-    config: Dict[str, Any],
-    img_path: str | Path,
-) -> OutputContext:
-    """
-    Create the per-run OutputContext using local time.
-
-    Creates out/YYYYMMDD/ if needed and assigns the next available run counter
-    by scanning files that start with NNN__ in that day directory.
-    """
-    output_root_p = Path(output_root)
-
-    day_str = day_dir_name()  # local time YYYYMMDD
-    day_dir = output_root_p / day_str
-    day_dir.mkdir(parents=True, exist_ok=True)
-
-    run_n = next_run_counter(day_dir)
-    run_prefix = build_run_prefix(config=config, img_path=img_path, run_n=run_n, day_str=day_str)
-
-    return OutputContext(
-        output_root=output_root_p,
-        day_str=day_str,
-        day_dir=day_dir,
-        run_n=run_n,
-        run_prefix=run_prefix,
-    )
-
-def slugify(s: str, max_len: int = 64) -> str:
-    """Convert text into a filesystem-safe slug."""
-    s = (s or "").strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    s = re.sub(r"-{2,}", "-", s).strip("-")
-    return (s or "run")[:max_len]
-
-
-def day_dir_name(now: datetime | None = None) -> str:
-    """Return YYYYMMDD using local system time."""
-    now = now or datetime.now()
-    return now.strftime("%Y%m%d")
-
-
-def next_run_counter(day_dir: Path) -> int:
-    """Return next run counter for files starting with NNN__."""
-    if not day_dir.exists():
-        return 1
-
-    max_n = 0
-    for p in day_dir.iterdir():
-        if p.is_file():
-            m = re.match(r"^(\d{3})__", p.name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    return max_n + 1
-
-
-def build_run_prefix(
-    config: Dict[str, Any],
-    img_path: str | Path,
-    run_n: int,
-    day_str: str,
-) -> str:
-    """
-    Return:
-      NNN__YYYYMMDD__output_name_slug__image_stem
-    """
-    cfg_slug = slugify(config.get("output_name_slug", "run"))
-    image_stem = Path(img_path).stem  # preserve case
-    return f"{run_n:03d}__{day_str}__{cfg_slug}__{image_stem}"
-
-
-def out_path(day_dir: Path, run_prefix: str, artifact: str, ext: str) -> Path:
-    """Return out/YYYYMMDD/NNN__YYYYMMDD__slug__image__artifact.ext"""
-    artifact = slugify(artifact, max_len=48)
-    ext = ext.lstrip(".")
-    return day_dir / f"{run_prefix}__{artifact}.{ext}"
 
 # =========================
 # Preprocessing: mosaic labeling
@@ -304,7 +193,7 @@ def no_overlap(center: Tuple[int, int], radius: int, placed: List[Tuple[Tuple[in
 
 import scipy.ndimage as ndi  # pip install scipy
 
-def pack_region_with_circles_dt_bad(mask: np.ndarray,
+def pack_region_with_circles_dt(mask: np.ndarray,
                                 diameters: List[int]) -> List[Dict[str, Any]]:
     """
     High-density packing using a distance transform. (maximal discs).
@@ -367,64 +256,6 @@ def pack_region_with_circles_dt_bad(mask: np.ndarray,
 
     return circles
 
-def pack_region_with_circles_dt(mask: np.ndarray,
-                                diameters: List[int]) -> List[Dict[str, Any]]:
-    """
-    High-density packing using a distance transform (maximal discs),
-    with explicit no_overlap() enforcement.
-    """
-
-    avail = (mask > 0).astype(np.uint8)
-
-    circles: List[Dict[str, Any]] = []
-    placed: List[Tuple[Tuple[int, int], int]] = []  # [((x,y), r), ...]
-
-    def carve_circle(a: np.ndarray, cx: int, cy: int, r: int):
-        cv2.circle(a, (cx, cy), r, 0, thickness=-1)
-
-    # If touching is disallowed, carve a 1px moat to reduce near-miss placements
-    clearance = 1 if DISALLOW_TOUCHING else 0
-
-    for d in sorted(set(int(x) for x in diameters if x > 1), reverse=True):
-        r = max(1, int(round(d / 2)))
-        placed_this_d = 0
-
-        # Reject-loop guard to avoid pathological cases
-        max_rejections = int(avail.size * 0.05)  # heuristic
-        rejections = 0
-
-        while True:
-            if avail.max() == 0:
-                break
-
-            dt = cv2.distanceTransform(avail, distanceType=cv2.DIST_L2, maskSize=5)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(dt)
-            if maxVal < (r + clearance):
-                break
-
-            cx, cy = int(maxLoc[0]), int(maxLoc[1])
-
-            # Verify: circle inside original mask + no overlaps with already placed circles
-            ok = circle_fits(mask, (cx, cy), r) and no_overlap((cx, cy), r, placed)
-
-            if not ok:
-                # Invalidate this candidate so DT picks another peak next iteration
-                avail[cy, cx] = 0
-                rejections += 1
-                if rejections > max_rejections:
-                    break
-                continue
-
-            circles.append({'center': (cx, cy), 'radius': r})
-            placed.append(((cx, cy), r))
-            placed_this_d += 1
-
-            # Carve accepted circle (+ clearance if strict non-touching)
-            carve_circle(avail, cx, cy, r + clearance)
-
-        print(f"[DT] diameter={d} placed={placed_this_d}")
-
-    return circles
 
 # =========================
 # Helpers for mm/grid/CSV
@@ -434,45 +265,6 @@ CSV_FIELDS = ["grid_cell","position_in_mm","diameter_in_mm","color_rgb","color_n
 ROUND_MODES = {"nearest","floor","ceil"}
 
 def center_crop_to_aspect(img, target_w_mm: float, target_h_mm: float):
-    """
-    Center-crop an image to match a target aspect ratio.
-
-    The target aspect ratio is computed as ``target_w_mm / target_h_mm``.
-    The function crops the image *without resizing*, removing pixels equally
-    from opposite sides so the crop remains centered.
-
-    If the current aspect ratio already matches the target (within a small
-    floating-point tolerance), the input image is returned unchanged.
-
-    Args:
-        img: Image array with shape ``(H, W)`` or ``(H, W, C)``. Typically a
-            NumPy array (e.g., an OpenCV image).
-        target_w_mm: Target width in millimeters (only the ratio matters).
-        target_h_mm: Target height in millimeters (only the ratio matters).
-
-    Returns:
-        The center-cropped image as a view into ``img`` (same dtype). The output
-        has the same height or width as the input, and an aspect ratio matching
-        ``target_w_mm / target_h_mm``.
-
-    Notes:
-        * This function returns a NumPy slice (a view), not a copy.
-        * Rounding is used when computing the new pixel width/height, so the
-          resulting aspect ratio is as close as possible in integer pixels.
-
-    Raises:
-        ZeroDivisionError: If ``target_h_mm`` is 0.
-        ValueError: If ``img`` does not have at least 2 dimensions.
-
-    Examples:
-        Crop a landscape image to a 4:3 aspect ratio::
-
-            cropped = center_crop_to_aspect(img, 4.0, 3.0)
-
-        Crop to A4 paper aspect ratio (same units)::
-
-            cropped = center_crop_to_aspect(img, 210.0, 297.0)
-    """
     h, w = img.shape[:2]
     tgt = float(target_w_mm) / float(target_h_mm)
     cur = float(w) / float(h)
@@ -605,14 +397,11 @@ def _identifier(color_name: str, d_mm: float, seq: int) -> str:
     # two decimals so 19.05 is preserved; replace '.' with '_' in label if you prefer
     return f"{_sanitize_id(color_name)}_{d_mm:.2f}_{seq}"
 
-from typing import Optional
-
 # =========================
 # Write Assembly Aid CSV
 # =========================
 def write_assembly_aid_csv(
     csv_path: str,
-    summary_csv_path: str,
     regions: list[dict],
     img_w: int,
     img_h: int,
@@ -623,43 +412,22 @@ def write_assembly_aid_csv(
     mm_round_mode: str,
     mm_round_step: float,
 ) -> None:
-    """
-    Assembly CSV:
-      Color, Diameter, CenterX, CenterY, Identifier
-
-    Summary CSV (if summary_csv_path is not None):
-      Color, <diameter_1>, <diameter_2>, ..., Total
-
-    Diameters in the summary are taken directly from the per-row CSV,
-    so the two files always stay consistent.
-    """
     import csv
-
     px_to_mm_x = board_w_mm / float(img_w)
     px_to_mm_y = board_h_mm / float(img_h)
 
     # RGB -> color name map
-    name_map: dict[tuple[int, int, int], str] = {}
+    name_map = {}
     if color_names and len(color_names) >= len(color_rgb_values):
         for rgb, nm in zip(color_rgb_values, color_names):
             name_map[tuple(int(v) for v in rgb)] = nm
 
-    # Keep colour order from config
-    colors_in_order: list[str] = [
-        name_map.get(tuple(int(v) for v in rgb), f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
-        for rgb in color_rgb_values
-    ]
-
     counters: dict[tuple[str, float], int] = {}
-    rows: list[dict] = []
-    # For summary: color -> diameter -> count
-    summary_counts: dict[str, dict[float, int]] = {}
+    rows = []
 
     for reg in regions:
         rgb = tuple(int(v) for v in reg["color"])
         cname = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
-        if cname not in summary_counts:
-            summary_counts[cname] = {}
 
         for c in reg["circles"]:
             cx_px, cy_px = c["center"]
@@ -668,50 +436,98 @@ def write_assembly_aid_csv(
             cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
             cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
             d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
-            d_mm_f = float(d_mm)
 
-            key = (cname, d_mm_f)
+            key = (cname, float(d_mm))
             counters[key] = counters.get(key, 0) + 1
-            ident = _identifier(cname, d_mm_f, counters[key])
+            ident = _identifier(cname, float(d_mm), counters[key])
 
             rows.append({
                 "Color": cname,
-                "Diameter": d_mm_f,
+                "Diameter": float(d_mm),
                 "CenterX": float(cx_mm),
                 "CenterY": float(cy_mm),
                 "Identifier": ident,
             })
 
-            summary_counts[cname][d_mm_f] = summary_counts[cname].get(d_mm_f, 0) + 1
-
-    # Sort rows: by color, then diameter desc, then Y,X
+    # stable order: by color, then diameter desc, then X,Y
     rows.sort(key=lambda r: (r["Color"], -r["Diameter"], r["CenterY"], r["CenterX"]))
 
-    # ---- Write assembly CSV (per-circle) ----
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["Color", "Diameter", "CenterX", "CenterY", "Identifier"])
         w.writeheader()
         w.writerows(rows)
 
-    # ---- Optional summary CSV (per-color × per-diameter) ----
-    if summary_csv_path is not None:
-        # Collect all diameters actually used in the rows
-        all_diams = sorted({r["Diameter"] for r in rows}, reverse=True)
+# =========================
+# Write Assembly Aid Summary CSV
+# =========================
+def write_assembly_aid_summary_csv(
+    csv_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    color_rgb_values: list[tuple[int, int, int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    mm_round_mode: str,
+    mm_round_step: float,
+    allowed_sizes_mm_desc: list[float],
+) -> None:
+    """
+    Build a per-colour, per-diameter summary table.
+    Each row = one colour; each diameter column = count of circles of that size (0 allowed).
+    """
+    import csv
 
-        # Header: Color, <diam_1>, <diam_2>, ..., Total
-        headers = ["Color"] + [f"{d:.2f}" for d in all_diams] + ["Total"]
+    if not allowed_sizes_mm_desc:
+        raise ValueError("allowed_sizes_mm_desc must be a non-empty list of diameters in mm.")
 
-        with open(summary_csv_path, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(headers)
+    # px -> mm scale (use X; pixels are square so it's fine)
+    px_to_mm_x = board_w_mm / float(img_w)
 
-            # row order: colours from config, then any extras
-            extra_colors = [c for c in summary_counts.keys() if c not in colors_in_order]
-            for cname in colors_in_order + extra_colors:
-                counts_for_color = summary_counts.get(cname, {})
-                vals = [counts_for_color.get(d, 0) for d in all_diams]
-                w.writerow([cname, *vals, sum(vals)])
+    # RGB -> colour name map
+    name_map: dict[tuple[int, int, int], str] = {}
+    if color_names and len(color_names) >= len(color_rgb_values):
+        for rgb, nm in zip(color_rgb_values, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
 
+    # Canonical colour order = the order from config (color_rgb_values)
+    colors_in_order: list[str] = [
+        name_map.get(tuple(int(v) for v in rgb), f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        for rgb in color_rgb_values
+    ]
+
+    # Zero-initialised table: colour -> size -> count
+    sizes = [float(s) for s in allowed_sizes_mm_desc]  # ensure float, largest -> smallest
+    table: dict[str, dict[float, int]] = {
+        cname: {s: 0 for s in sizes} for cname in colors_in_order
+    }
+
+    # Count circles, using same rounding & snapping as the row CSV
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        cname = name_map.get(rgb, f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+        if cname not in table:
+            # colour wasn't in the original list; add it
+            table[cname] = {s: 0 for s in sizes}
+        for c in reg["circles"]:
+            d_px = int(c["radius"]) * 2
+            d_mm_raw = d_px * px_to_mm_x
+            d_mm = float(round_mm(d_mm_raw, mm_round_mode, mm_round_step))
+
+            # snap to nearest allowed size so tiny numeric differences don't create new columns
+            nearest = min(sizes, key=lambda s: abs(s - d_mm))
+            table[cname][nearest] = table[cname].get(nearest, 0) + 1
+
+    # Write summary CSV: Color, then one column per diameter (mm), then Total
+    headers = ["Color"] + [f"{s:.2f}" for s in sizes] + ["Total"]
+
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(headers)
+        for cname in colors_in_order:
+            counts = [table[cname][s] for s in sizes]
+            w.writerow([cname, *counts, sum(counts)])
 
 # =========================
 # Write Assembly Aid SVG
@@ -801,15 +617,9 @@ def write_assembly_aid_svg(
             cx_px, cy_px = c["center"]
             d_px = int(c["radius"]) * 2
 
-            # cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
-            # cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
-            # d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
-            # r_mm  = d_mm / 2.0
-
-            # debugging overlapping circles in SVG output
-            cx_mm = cx_px * px_to_mm_x
-            cy_mm = cy_px * px_to_mm_y
-            d_mm = d_px * px_to_mm_x
+            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
             r_mm  = d_mm / 2.0
 
             # unique identifier per (color, diameter)
@@ -926,8 +736,6 @@ def write_layout_svg(
     px_to_mm_x = board_w_mm / float(img_w)
     px_to_mm_y = board_h_mm / float(img_h)
 
-    print("***** write_layout_svg px_to_mm_x", px_to_mm_x, "px_to_mm_y", px_to_mm_y)
-
     # Map exact RGB to name if available
     name_map = {}
     if color_names and len(color_names) >= len(color_rgb_values):
@@ -987,32 +795,14 @@ def write_layout_svg(
         for c in reg["circles"]:
             cx_px, cy_px = c["center"]
             r_px = int(c["radius"])
-            # d_mm = (2 * r_px) * px_to_mm_x  # px are square; x-scale is fine
+            d_mm = (2 * r_px) * px_to_mm_x  # px are square; x-scale is fine
 
             # Use your rounding policy to get integer/step mm in SVG too
             # (reusing round_mm from your helpers)
-            # cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
-            # cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
-            # r_mm  = round_mm(d_mm,             mm_round_mode, mm_round_step) / 2.0
-
-            # debugging overlapping circles in SVG output
-            # cx_mm = cx_px * px_to_mm_x
-            # cy_mm = cy_px * px_to_mm_y
-            # r_mm  = d_mm / 2.0
-
-            scale = min(px_to_mm_x, px_to_mm_y)  # safest: never enlarges relative to either axis
-
-            cx_mm = cx_px * scale
-            cy_mm = cy_px * scale
-            r_mm  = r_px  * scale
-
-
-            print(
-            f"cx_px={cx_px}, cy_px={cy_px}, r_px={r_px} | "
-            f"scale={scale} | "
-            f"cx_mm={cx_mm}, cy_mm={cy_mm}, r_mm={r_mm} | "
-            f"gid={gid}"
-        )
+            from math import isfinite
+            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            r_mm  = round_mm(d_mm,             mm_round_mode, mm_round_step) / 2.0
 
             el = ET.SubElement(grp, "circle",
                                cx=str(cx_mm), cy=str(cy_mm), r=str(r_mm))
@@ -1081,40 +871,9 @@ def map_clusters_to_user_colors(cluster_centers_bgr: np.ndarray,
 # =========================
 def candidate_points_for_region(mask: np.ndarray, edge_map: np.ndarray, max_samples: int = CANDIDATE_MAX_SAMPLES) -> np.ndarray:
     """
-    Candidate point generation for a masked region (edge-aware sampling).
-
-    Generate candidate (x, y) points inside a masked region, biased toward edges for 
-    use in circle placement or other spatial sampling tasks. Points favor region boundaries
-    while still covering the interior.
-
-    Candidates are drawn from three sources, in order of priority:
-
-        * Region centroid, to ensure a stable interior seed.
-        * Edge-adjacent points, derived from a dilated edge map.
-        * Interior grid points sampled from a regular grid whose stride adapts
-            to image area and the sample budget.
-
-    Edge and grid points are randomly subsampled to respect ``max_samples``.
-    The final list is shuffled to avoid ordering bias.
-
-    Args:
-        mask:
-            Binary region mask (non-zero values indicate valid interior pixels).
-        edge_map:
-            Binary edge image (e.g., from Canny) aligned with ``mask``.
-            Used only to bias candidate selection toward boundaries.
-        max_samples:
-            Upper bound on the number of candidate points returned.
-
-    Returns:
-        A NumPy array of shape (N, 2) containing integer (x, y) coordinates
-        inside the masked region.
-
-    Notes:
-        - Edge dilation improves robustness to thin or broken edges.
-        - Grid stride scales with image size and sample budget.
-        - Results are nondeterministic unless the RNG is seeded.
-        - Coordinates are returned as (x, y), not (row, col).
+    Candidate (x,y) points prioritized near edges and spread across region.
+    - EDGE_SAMPLE_FRACTION: points near edges (dilated Canny)
+    - GRID_SAMPLE_FRACTION: cap for blue-noise-like grid over the region interior
     """
     h, w = mask.shape
 
@@ -1207,8 +966,7 @@ def pack_circles_from_image(
     circle_sizes: Optional[List[int]] = None,
     output_size: Tuple[int, int] = DEFAULT_OUTPUT_SIZE,
     visualization_outdir: str = "./circle_packing_outputs",
-    preprocess_cfg: Optional[Dict[str, Any]] = None,   # <-- add this line
-    output_paths: Optional[Dict[str, str]] = None,
+    preprocess_cfg: Optional[Dict[str, Any]] = None   # <-- add this line
 ) -> Dict[str, Any]:
     
     # UNPACK *immediately* — now these names exist in this scope
@@ -1378,33 +1136,25 @@ def pack_circles_from_image(
         print("[NOTE] Circle packing is NP-hard; alternative diameter sets or local refinements may yield denser packings.")
 
         # One session ID for all outputs
-        # session_id = uuid.uuid4().hex
-
-        # ctx = make_output_context(visualization_outdir, cfg, img_path)
+        session_id = uuid.uuid4().hex
 
         # Save visualization
-        # os.makedirs(visualization_outdir, exist_ok=True)
-        # vis_path = ctx.outpath("output_image", "png")  
-        # vis_path = os.path.join(visualization_outdir, f"packing_{session_id}.png")
-        vis_path = output_paths["output_png"]  # 
+        os.makedirs(visualization_outdir, exist_ok=True)
+        vis_path = os.path.join(visualization_outdir, f"packing_{session_id}.png")
         announce("SAVE_VISUALIZATION", {"path": vis_path, "size": (w, h)})
         ok = cv2.imwrite(vis_path, packed_visual)
         ensure_bool(ok, "Failed to save visualization image.")
         print("[OK] Visualization saved.")
 
         # NEW: circles-only (transparent PNG)
-        # circles_only_path = os.path.join(visualization_outdir, f"packing_{session_id}_circles_only.png")
-        # circles_only_path = ctx.outpath("circles_only_image", "png")
-        circles_only_path = output_paths["circles_png"]  # 
+        circles_only_path = os.path.join(visualization_outdir, f"packing_{session_id}_circles_only.png")
         announce("SAVE_VISUALIZATION", {"path": circles_only_path, "type": "circles_only_bgra"})
         ok2 = cv2.imwrite(circles_only_path, packed_circles_only)
         ensure_bool(ok2, "Failed to save circles-only visualization.")
         print(f"[OK] Circles-only visualization saved: {circles_only_path}")
 
         # --- NEW: Save CSV using your computed circles (no detection) ---
-        # csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.csv")
-        csv_path = output_paths["layout_csv"]  # 
-
+        csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.csv")
         write_layout_csv(
             csv_path=csv_path,
             regions=all_regions_output,             # <-- use your computed circles
@@ -1422,8 +1172,7 @@ def pack_circles_from_image(
 
         # --- SVG export (mm-accurate) ---
         if export_svg:
-            # svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.svg")
-            svg_path = output_paths["layout_svg"]  # 
+            svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_layout.svg")
             write_layout_svg(
                 svg_path=svg_path,
                 regions=all_regions_output,            # your computed circles
@@ -1441,14 +1190,11 @@ def pack_circles_from_image(
             )
             print(f"[OK] SVG layout saved: {svg_path}")
 
+
             # --- Assembly-aid CSV ---
-            # aid_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.csv")
-            # aid_summary_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly_summary.csv")
-            aid_csv_path = output_paths["assembly_csv"]  # 
-            aid_summary_csv_path = output_paths["assemblySummary_csv"]  #
+            aid_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.csv")
             write_assembly_aid_csv(
                 csv_path=aid_csv_path,
-                summary_csv_path=aid_summary_csv_path,
                 regions=all_regions_output,
                 img_w=w, img_h=h,
                 color_rgb_values=user_colors,
@@ -1459,8 +1205,7 @@ def pack_circles_from_image(
             print(f"[OK] Assembly CSV saved: {aid_csv_path}")
 
             # --- Assembly-aid SVG ---
-            # aid_svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.svg")
-            aid_svg_path = output_paths["assembly_svg"]  # 
+            aid_svg_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.svg")
             write_assembly_aid_svg(
                 svg_path=aid_svg_path,
                 regions=all_regions_output,
@@ -1477,37 +1222,56 @@ def pack_circles_from_image(
             )
             print(f"[OK] Assembly SVG saved: {aid_svg_path}")
 
+            allowed_sizes_mm_desc = [
+                float(s) for s in preprocess_cfg.get("__allowed_sizes_mm__", [])
+            ]
+
+            summary_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly_summary.csv")
+            write_assembly_aid_summary_csv(
+                csv_path=summary_csv_path,
+                regions=all_regions_output,
+                img_w=w,
+                img_h=h,
+                color_rgb_values=user_colors,      # same list you passed into pack_circles_from_image
+                color_names=color_names,
+                board_w_mm=float(out_w_mm),
+                board_h_mm=float(out_h_mm),
+                mm_round_mode=mm_round_mode,
+                mm_round_step=mm_round_step,
+                allowed_sizes_mm_desc=allowed_sizes_mm_desc,
+            )
+            print(f"[OK] Assembly Summary CSV saved: {summary_csv_path}")
+
+
             # include in result dict
             result_paths = {
                 "assembly_csv": aid_csv_path,
                 "assembly_svg": aid_svg_path,
-                "summary_csv_path": aid_summary_csv_path,
+                "assembly_summary_csv": summary_csv_path,
             }
 
 
-
-
         # Final structure validation
-        # announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
-        # ensure_bool(isinstance(all_regions_output, list) and len(all_regions_output) == num_regions,
-        #             f"regions must be a list of {num_regions} dicts.")
-        # for reg in all_regions_output:
-        #     ensure_bool(set(reg.keys()) == {"color", "circles", "circle_size_counts"},
-        #                 "Region dict keys mismatch.")
-        #     ensure_bool(isinstance(reg["color"], tuple) and len(reg["color"]) == 3,
-        #                 "Region color must be an (R,G,B) tuple.")
-        #     for c in reg["circles"]:
-        #         ensure_bool(set(c.keys()) == {"center", "radius", "color"}, "Circle dict keys mismatch.")
-        #         ensure_bool(isinstance(c["center"], tuple) and len(c["center"]) == 2,
-        #                     "Circle center must be (x,y).")
-        #         ensure_bool(isinstance(c["radius"], int) and c["radius"] > 0,
-        #                     "Circle radius must be positive int.")
-        #         ensure_bool(isinstance(c["color"], tuple) and len(c["color"]) == 3,
-        #                     "Circle color must be an (R,G,B) tuple.")
-        #     for rc in reg["circle_size_counts"]:
-        #         ensure_bool(isinstance(rc, tuple) and len(rc) == 2,
-        #                     "circle_size_counts entries must be (radius, count).")
-        # print("[OK] Output schema validated.")
+        announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
+        ensure_bool(isinstance(all_regions_output, list) and len(all_regions_output) == num_regions,
+                    f"regions must be a list of {num_regions} dicts.")
+        for reg in all_regions_output:
+            ensure_bool(set(reg.keys()) == {"color", "circles", "circle_size_counts"},
+                        "Region dict keys mismatch.")
+            ensure_bool(isinstance(reg["color"], tuple) and len(reg["color"]) == 3,
+                        "Region color must be an (R,G,B) tuple.")
+            for c in reg["circles"]:
+                ensure_bool(set(c.keys()) == {"center", "radius", "color"}, "Circle dict keys mismatch.")
+                ensure_bool(isinstance(c["center"], tuple) and len(c["center"]) == 2,
+                            "Circle center must be (x,y).")
+                ensure_bool(isinstance(c["radius"], int) and c["radius"] > 0,
+                            "Circle radius must be positive int.")
+                ensure_bool(isinstance(c["color"], tuple) and len(c["color"]) == 3,
+                            "Circle color must be an (R,G,B) tuple.")
+            for rc in reg["circle_size_counts"]:
+                ensure_bool(isinstance(rc, tuple) and len(rc) == 2,
+                            "circle_size_counts entries must be (radius, count).")
+        print("[OK] Output schema validated.")
 
         return {
             "regions": all_regions_output,
@@ -1522,7 +1286,7 @@ def pack_circles_from_image(
                 "mode": str(preprocess_cfg.get("__mm_round_mode__", "nearest")),
                 "step_mm": float(preprocess_cfg.get("__mm_round_step__", 1)),
             },
-            "session_id": "old session_id to be replaced with output_paths"
+            "session_id": session_id
         }
 
     except Exception as e:
@@ -1612,6 +1376,9 @@ def main():
 
     if not circle_sizes_px_desc:
         raise ValueError("No valid circle sizes (after filtering by min_d_mm).")
+    
+    # keep a descending mm list for summary output
+    allowed_sizes_mm_desc = sorted((float(d) for d in circle_sizes_mm), reverse=True)
 
     img_path = cfg.get("img_path")
   
@@ -1621,28 +1388,11 @@ def main():
     user_colors  = [tuple(int(v) for v in e["rgb"]) for e in color_cfg]
     color_names  = [str(e["name"]) for e in color_cfg]
 
-    circle_sizes = cfg.get("circle_sizes", None)
+    # circle_sizes = cfg.get("circle_sizes", None)
     output_size_raw = cfg.get("output_size", list(DEFAULT_OUTPUT_SIZE))
     output_size = (int(output_size_raw[0]), int(output_size_raw[1]))
     visualization_outdir = cfg.get("visualization_outdir", "./circle_packing_outputs")
 
-    # output context that holds all output paths
-    ctx = make_output_context(
-        output_root=visualization_outdir,
-        config=cfg,
-        img_path=img_path,
-    )
-
-    # NEW: define paths only after ctx exists
-    output_paths = {
-        "output_png":         ctx.outpath("output", "png"),
-        "assembly_csv":       ctx.outpath("assembly", "csv"),
-        "assembly_svg":       ctx.outpath("assembly", "svg"),
-        "assemblySummary_csv":   ctx.outpath("assembly_summary", "csv"),
-        "circles_png":   ctx.outpath("circles_only", "png"),
-        "layout_csv":         ctx.outpath("layout", "csv"),
-        "layout_svg":         ctx.outpath("layout", "svg"),
-    }
 
     # --- 4. Now build preprocess_cfg (this is what pack_circles_from_image uses) ---
     preprocess_cfg = {
@@ -1656,6 +1406,7 @@ def main():
             "__export_svg__": bool(cfg.get("export_svg", True)),
             "__svg_include_grid__": bool(cfg.get("svg_include_grid", True)),
             "__svg_transparent_bg__": bool(cfg.get("svg_transparent_bg", True)),
+            "__allowed_sizes_mm__": allowed_sizes_mm_desc,
         }
 
     result = pack_circles_from_image(
@@ -1664,14 +1415,8 @@ def main():
             circle_sizes=circle_sizes_px_desc,
             output_size=(render.output_w_px, render.output_h_px),
             visualization_outdir=render.outdir,
-            preprocess_cfg=preprocess_cfg,      # <-- must be passed in
-            output_paths=output_paths,        # <-- must be passed in
+            preprocess_cfg=preprocess_cfg      # <-- must be passed in
         )
-
-    print("[Output Paths]")
-    for name, path in output_paths.items():
-        print(f"  {name}: {path}")
-
 
     # Convert tuples to lists for JSON printing
     def tuplify(o):
@@ -1684,7 +1429,7 @@ def main():
         return o
 
     out = tuplify(result)
-    # print(json.dumps(out, indent=2 if args.pretty else None))
+    print(json.dumps(out, indent=2 if args.pretty else None))
 
 
 if __name__ == "__main__":

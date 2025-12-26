@@ -1,5 +1,5 @@
 # Circle packing configuration (YAML)
-# img_path: "./images/4x4_Kroma_16.png"          # Path to your JPG
+output_name_slug: "circle_packing"
 img_path: "./images/Self_Portrait_Mar17.jpeg" 
 
 # Color palette used for packing and CSV - Based on Kroma Paints
@@ -62,7 +62,7 @@ physical:
   output_size_mm: [611.2, 812.8]   # width, height in mm
   min_circle_diameter_mm: 6
   grid_divisions: 10
-  boundary_epsilon: 1e-9
+  boundary_epsilon: 0.5            # boundary_epsilon: 1e-9 change to see if more space filled in packing 
   mm_rounding:
     mode: nearest
     step_mm: 1
