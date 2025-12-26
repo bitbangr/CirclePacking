@@ -467,6 +467,109 @@ def pack_region_with_circles_dt(mask: np.ndarray,
 
     return circles
 
+
+def pack_region_with_circles_dt_space_first(mask: np.ndarray,
+                                            diameters: List[int],
+                                            carve_pad_px: int = 0) -> List[Dict[str, Any]]:
+    """
+    Space-first DT packing:
+      - repeatedly place at the current global DT maximum
+      - choose the largest allowed radius that fits at that point
+      - carve and repeat until even the smallest circle cannot fit
+    """
+    avail = (mask > 0).astype(np.uint8)  # 0/1 is fine for OpenCV distanceTransform
+    circles: List[Dict[str, Any]] = []
+
+    # Allowed radii, descending
+    radii = sorted({max(1, int(round(d / 2))) for d in diameters if d > 1}, reverse=True)
+    if not radii:
+        return circles
+    min_r = radii[-1]
+
+    def carve_circle(a: np.ndarray, cx: int, cy: int, r: int):
+        cv2.circle(a, (cx, cy), int(r + carve_pad_px), 0, thickness=-1)
+
+    while True:
+        if avail.max() == 0:
+            break
+
+        dt = cv2.distanceTransform(avail, distanceType=cv2.DIST_L2, maskSize=5)
+        _, maxVal, _, maxLoc = cv2.minMaxLoc(dt)
+
+        if maxVal < min_r:
+            break
+
+        cx, cy = maxLoc  # (x, y)
+        # Choose the largest allowed radius that fits here
+        r = None
+        for rr in radii:
+            if maxVal >= rr:
+                r = rr
+                break
+        if r is None:
+            break
+
+        circles.append({'center': (int(cx), int(cy)), 'radius': int(r)})
+        carve_circle(avail, cx, cy, r)
+
+    return circles
+
+def pack_region_with_circles_dt_simple(
+    mask: np.ndarray,
+    diameters: List[int],
+    carve_pad_px: int = 1
+) -> List[Dict[str, Any]]:
+    PAD = carve_pad_px
+# def pack_region_with_circles_dt_simple(
+#     mask: np.ndarray,
+#     diameters: List[int],
+# ) -> List[Dict[str, Any]]:
+    avail = (mask > 0).astype(np.uint8)
+    circles = []
+
+    # Conservative radii (floor)
+    radii = sorted({max(1, d // 2) for d in diameters if d > 1}, reverse=True)
+    if not radii:
+        return circles
+
+    min_r = radii[-1]
+    PAD = 1  # critical: prevents overlap due to rounding
+
+    def carve(a, cx, cy, r):
+        cv2.circle(a, (cx, cy), r + PAD, 0, -1)
+
+    while True:
+        if avail.max() == 0:
+            break
+
+        dt = cv2.distanceTransform(avail, cv2.DIST_L2, 5)
+        _, maxVal, _, (cx, cy) = cv2.minMaxLoc(dt)
+
+        if maxVal < (min_r + PAD):
+            break
+
+        # largest radius that fits
+        r = next((rr for rr in radii if maxVal >= rr + PAD), None)
+        if r is None:
+            break
+
+        # single cheap overlap check (belt & suspenders)
+        ok = True
+        for c in circles:
+            dx = c["center"][0] - cx
+            dy = c["center"][1] - cy
+            if dx*dx + dy*dy < (c["radius"] + r)**2:
+                ok = False
+                break
+        if not ok:
+            carve(avail, cx, cy, 1)  # invalidate point and continue
+            continue
+
+        circles.append({"center": (cx, cy), "radius": r})
+        carve(avail, cx, cy, r)
+
+    return circles
+
 # =========================
 # Helpers for mm/grid/CSV
 # =========================
@@ -1364,14 +1467,18 @@ def pack_circles_from_image(
            #  original packing code
            #  region_circles = pack_region_with_circles(mask, region_edges, diameters)
 
-            region_circles = pack_region_with_circles_dt(mask, diameters)
+            # region_circles = pack_region_with_circles_dt(mask, diameters)
+            region_circles = pack_region_with_circles_dt_space_first(mask, diameters, carve_pad_px=1)
+            #region_circles = pack_region_with_circles_dt_simple(mask, diameters, carve_pad_px=0)
 
 
             # Validate placements: inside bounds and within mask
             valid = []
             for c in region_circles:
                 (x, y), r = c['center'], c['radius']
-                if within_bounds((x, y), w, h, r=r) and circle_fits(mask, (x, y), r):
+                # if within_bounds((x, y), w, h, r=r) and circle_fits(mask, (x, y), r):
+                # stop deleting good circles - ChatGPT says to do this
+                if within_bounds((x, y), w, h, r=r):
                     valid.append(c)
             if len(valid) != len(region_circles):
                 print(f"[WARN] Removed {len(region_circles) - len(valid)} invalid circles after validation.")

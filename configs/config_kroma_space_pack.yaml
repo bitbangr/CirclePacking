@@ -1,0 +1,72 @@
+# Circle packing configuration (YAML)
+output_name_slug: "spacepack_portrait"
+img_path: "./images/Self_Portrait_Mar17.jpeg" 
+
+# Color palette used for packing and CSV - Based on Kroma Paints
+user_colors:
+  
+  - name: "Cadmium Med. Yellow"
+    rgb: [249, 205, 18]
+  - name: "Cadmium Orange"
+    rgb: [243, 116, 35]
+  - name: "Cadmium Med. Red"
+    rgb: [229, 31, 37]
+  - name: "Naphthol Light Red"
+    rgb: [201, 33, 40]
+  - name: "Quinacridone Red"
+    rgb: [183, 33, 39]
+  - name: "Benzi Burnt Orange"
+    rgb: [117, 19, 24]
+  - name: "Dioxazine Violet"
+    rgb: [13, 16, 16]
+  - name: "Paynes's Grey"
+    rgb: [7, 8, 10]
+  - name: "Ultramarine Blue"
+    rgb: [45, 54, 147]
+  - name: "Phthalo Blue"
+    rgb: [31, 27, 79]
+  - name: "Phthalo Green"
+    rgb: [8, 29, 34]
+  - name: "Sap Green"
+    rgb: [34, 35, 31]
+  - name: "Transparent Red Oxide"
+    rgb: [127, 39, 24]
+  - name: "Burnt Sienna"
+    rgb: [116, 63, 27]
+  - name: "Burnt Umber"
+    rgb: [58, 24, 24]
+  - name: "Iridescent Gold"
+    rgb: [209, 147, 70]
+  - name: "Pearlescent White"
+    rgb: [220, 214, 210]
+
+
+# Allowed circle diameters (millimeters)
+circle_sizes_mm: [152.4, 101.6, 76.2, 50.8, 38.1, 25.4, 19.05, 13,7]
+
+# Optional: six allowed diameters (px). If omitted, defaults are used.
+# circle_sizes: [10, 30, 20, 50, 100, 150]
+# circle_sizes: [150, 100, 64, 48, 32, 24, 16, 12, 8, 6, 4]
+
+# Optional output (width, height). Default is [1000, 1000].
+output_size: [752, 1000]
+
+# Where to write the filled-circle visualization PNG
+visualization_outdir: "./circle_packing_outputs"
+
+preprocess:
+  mode: mosaic      # options: mosaic | none (or omit for default)
+  tile: 16          # cell size in pixels (try 8–32)
+
+physical:
+  output_size_mm: [611.2, 812.8]   # width, height in mm
+  min_circle_diameter_mm: 6
+  grid_divisions: 10
+  boundary_epsilon: 0.5            # boundary_epsilon: 1e-9 change to see if more space filled in packing 
+  mm_rounding:
+    mode: nearest
+    step_mm: 1
+
+export_svg: true
+svg_include_grid: true
+svg_transparent_bg: false
