@@ -1,0 +1,48 @@
+# Circle packing configuration (YAML)
+output_name_slug: "kempton_monet"
+img_path: "./images/KemptonHatInput.jpg" 
+
+# Color palette used for packing – Monet Impressionism palette
+user_colors:
+  - name: "Light Green"
+    rgb: [104, 130, 110]
+  - name: "Mauve"
+    rgb: [67, 23, 64]
+  - name: "Purple"
+    rgb: [72, 63, 93]
+  - name: "Mustard Yellow"
+    rgb: [211, 160, 60]
+  - name: "Light Purple"
+    rgb: [106, 81, 100]
+  - name: "Dark Green"
+    rgb: [14, 41, 33]
+  - name: "Peach"
+    rgb: [221, 170, 119]
+  - name: "Pink"
+    rgb: [198, 136, 128]
+
+# Allowed circle diameters (millimeters)
+circle_sizes_mm: [152.4, 101.6, 76.2, 50.8, 38.1, 25.4, 19.05, 13,7]
+
+# Optional output (width, height). Default is [1000, 1000].
+output_size: [1000, 1000]
+
+# Where to write the filled-circle visualization PNG
+visualization_outdir: "./circle_packing_outputs"
+
+preprocess:
+  mode: mosaic      # options: mosaic | none (or omit for default)
+  tile: 16          # cell size in pixels (try 8–32)
+
+physical:
+  output_size_mm: [508, 508]   # width, height in mm 20"x20
+  min_circle_diameter_mm: 6
+  grid_divisions: 10
+  boundary_epsilon: 0.5            # boundary_epsilon: 1e-9 change to see if more space filled in packing 
+  mm_rounding:
+    mode: nearest
+    step_mm: 1
+
+export_svg: true
+svg_include_grid: true
+svg_transparent_bg: false
