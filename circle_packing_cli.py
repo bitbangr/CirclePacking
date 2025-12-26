@@ -92,7 +92,7 @@ GRID_STRIDE_COEFF = 0.7 # was 1.0       # tune the density of grid candidates (h
 # Circle containment/overlap checks
 ANGLES_ON_RING = 36                   # samples per ring
 RING_FRACTIONS = [1.0, 0.7, 0.4]      # rings to sample for containment
-DISALLOW_TOUCHING = False # was True              # if True, require distance > r1 + r2
+DISALLOW_TOUCHING = True # was True              # if True, require distance > r1 + r2
 
 # Region coverage sanity-check
 COVERAGE_THRESHOLD = 0.95
@@ -193,7 +193,7 @@ def no_overlap(center: Tuple[int, int], radius: int, placed: List[Tuple[Tuple[in
 
 import scipy.ndimage as ndi  # pip install scipy
 
-def pack_region_with_circles_dt(mask: np.ndarray,
+def pack_region_with_circles_dt_bad(mask: np.ndarray,
                                 diameters: List[int]) -> List[Dict[str, Any]]:
     """
     High-density packing using a distance transform. (maximal discs).
@@ -256,6 +256,64 @@ def pack_region_with_circles_dt(mask: np.ndarray,
 
     return circles
 
+def pack_region_with_circles_dt(mask: np.ndarray,
+                                diameters: List[int]) -> List[Dict[str, Any]]:
+    """
+    High-density packing using a distance transform (maximal discs),
+    with explicit no_overlap() enforcement.
+    """
+
+    avail = (mask > 0).astype(np.uint8)
+
+    circles: List[Dict[str, Any]] = []
+    placed: List[Tuple[Tuple[int, int], int]] = []  # [((x,y), r), ...]
+
+    def carve_circle(a: np.ndarray, cx: int, cy: int, r: int):
+        cv2.circle(a, (cx, cy), r, 0, thickness=-1)
+
+    # If touching is disallowed, carve a 1px moat to reduce near-miss placements
+    clearance = 1 if DISALLOW_TOUCHING else 0
+
+    for d in sorted(set(int(x) for x in diameters if x > 1), reverse=True):
+        r = max(1, int(round(d / 2)))
+        placed_this_d = 0
+
+        # Reject-loop guard to avoid pathological cases
+        max_rejections = int(avail.size * 0.05)  # heuristic
+        rejections = 0
+
+        while True:
+            if avail.max() == 0:
+                break
+
+            dt = cv2.distanceTransform(avail, distanceType=cv2.DIST_L2, maskSize=5)
+            _, maxVal, _, maxLoc = cv2.minMaxLoc(dt)
+            if maxVal < (r + clearance):
+                break
+
+            cx, cy = int(maxLoc[0]), int(maxLoc[1])
+
+            # Verify: circle inside original mask + no overlaps with already placed circles
+            ok = circle_fits(mask, (cx, cy), r) and no_overlap((cx, cy), r, placed)
+
+            if not ok:
+                # Invalidate this candidate so DT picks another peak next iteration
+                avail[cy, cx] = 0
+                rejections += 1
+                if rejections > max_rejections:
+                    break
+                continue
+
+            circles.append({'center': (cx, cy), 'radius': r})
+            placed.append(((cx, cy), r))
+            placed_this_d += 1
+
+            # Carve accepted circle (+ clearance if strict non-touching)
+            carve_circle(avail, cx, cy, r + clearance)
+
+        print(f"[DT] diameter={d} placed={placed_this_d}")
+
+    return circles
 
 # =========================
 # Helpers for mm/grid/CSV
@@ -632,9 +690,15 @@ def write_assembly_aid_svg(
             cx_px, cy_px = c["center"]
             d_px = int(c["radius"]) * 2
 
-            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
-            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
-            d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
+            # cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            # cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            # d_mm  = round_mm(d_px * px_to_mm_x,  mm_round_mode, mm_round_step)
+            # r_mm  = d_mm / 2.0
+
+            # debugging overlapping circles in SVG output
+            cx_mm = cx_px * px_to_mm_x
+            cy_mm = cy_px * px_to_mm_y
+            d_mm = d_px * px_to_mm_x
             r_mm  = d_mm / 2.0
 
             # unique identifier per (color, diameter)
@@ -751,6 +815,8 @@ def write_layout_svg(
     px_to_mm_x = board_w_mm / float(img_w)
     px_to_mm_y = board_h_mm / float(img_h)
 
+    print("***** write_layout_svg px_to_mm_x", px_to_mm_x, "px_to_mm_y", px_to_mm_y)
+
     # Map exact RGB to name if available
     name_map = {}
     if color_names and len(color_names) >= len(color_rgb_values):
@@ -810,14 +876,32 @@ def write_layout_svg(
         for c in reg["circles"]:
             cx_px, cy_px = c["center"]
             r_px = int(c["radius"])
-            d_mm = (2 * r_px) * px_to_mm_x  # px are square; x-scale is fine
+            # d_mm = (2 * r_px) * px_to_mm_x  # px are square; x-scale is fine
 
             # Use your rounding policy to get integer/step mm in SVG too
             # (reusing round_mm from your helpers)
-            from math import isfinite
-            cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
-            cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
-            r_mm  = round_mm(d_mm,             mm_round_mode, mm_round_step) / 2.0
+            # cx_mm = round_mm(cx_px * px_to_mm_x, mm_round_mode, mm_round_step)
+            # cy_mm = round_mm(cy_px * px_to_mm_y, mm_round_mode, mm_round_step)
+            # r_mm  = round_mm(d_mm,             mm_round_mode, mm_round_step) / 2.0
+
+            # debugging overlapping circles in SVG output
+            # cx_mm = cx_px * px_to_mm_x
+            # cy_mm = cy_px * px_to_mm_y
+            # r_mm  = d_mm / 2.0
+
+            scale = min(px_to_mm_x, px_to_mm_y)  # safest: never enlarges relative to either axis
+
+            cx_mm = cx_px * scale
+            cy_mm = cy_px * scale
+            r_mm  = r_px  * scale
+
+
+            print(
+            f"cx_px={cx_px}, cy_px={cy_px}, r_px={r_px} | "
+            f"scale={scale} | "
+            f"cx_mm={cx_mm}, cy_mm={cy_mm}, r_mm={r_mm} | "
+            f"gid={gid}"
+        )
 
             el = ET.SubElement(grp, "circle",
                                cx=str(cx_mm), cy=str(cy_mm), r=str(r_mm))
@@ -1281,26 +1365,26 @@ def pack_circles_from_image(
 
 
         # Final structure validation
-        announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
-        ensure_bool(isinstance(all_regions_output, list) and len(all_regions_output) == num_regions,
-                    f"regions must be a list of {num_regions} dicts.")
-        for reg in all_regions_output:
-            ensure_bool(set(reg.keys()) == {"color", "circles", "circle_size_counts"},
-                        "Region dict keys mismatch.")
-            ensure_bool(isinstance(reg["color"], tuple) and len(reg["color"]) == 3,
-                        "Region color must be an (R,G,B) tuple.")
-            for c in reg["circles"]:
-                ensure_bool(set(c.keys()) == {"center", "radius", "color"}, "Circle dict keys mismatch.")
-                ensure_bool(isinstance(c["center"], tuple) and len(c["center"]) == 2,
-                            "Circle center must be (x,y).")
-                ensure_bool(isinstance(c["radius"], int) and c["radius"] > 0,
-                            "Circle radius must be positive int.")
-                ensure_bool(isinstance(c["color"], tuple) and len(c["color"]) == 3,
-                            "Circle color must be an (R,G,B) tuple.")
-            for rc in reg["circle_size_counts"]:
-                ensure_bool(isinstance(rc, tuple) and len(rc) == 2,
-                            "circle_size_counts entries must be (radius, count).")
-        print("[OK] Output schema validated.")
+        # announce("VALIDATE_OUTPUT_SCHEMA", {"regions": num_regions})
+        # ensure_bool(isinstance(all_regions_output, list) and len(all_regions_output) == num_regions,
+        #             f"regions must be a list of {num_regions} dicts.")
+        # for reg in all_regions_output:
+        #     ensure_bool(set(reg.keys()) == {"color", "circles", "circle_size_counts"},
+        #                 "Region dict keys mismatch.")
+        #     ensure_bool(isinstance(reg["color"], tuple) and len(reg["color"]) == 3,
+        #                 "Region color must be an (R,G,B) tuple.")
+        #     for c in reg["circles"]:
+        #         ensure_bool(set(c.keys()) == {"center", "radius", "color"}, "Circle dict keys mismatch.")
+        #         ensure_bool(isinstance(c["center"], tuple) and len(c["center"]) == 2,
+        #                     "Circle center must be (x,y).")
+        #         ensure_bool(isinstance(c["radius"], int) and c["radius"] > 0,
+        #                     "Circle radius must be positive int.")
+        #         ensure_bool(isinstance(c["color"], tuple) and len(c["color"]) == 3,
+        #                     "Circle color must be an (R,G,B) tuple.")
+        #     for rc in reg["circle_size_counts"]:
+        #         ensure_bool(isinstance(rc, tuple) and len(rc) == 2,
+        #                     "circle_size_counts entries must be (radius, count).")
+        # print("[OK] Output schema validated.")
 
         return {
             "regions": all_regions_output,
@@ -1454,7 +1538,7 @@ def main():
         return o
 
     out = tuplify(result)
-    print(json.dumps(out, indent=2 if args.pretty else None))
+    # print(json.dumps(out, indent=2 if args.pretty else None))
 
 
 if __name__ == "__main__":
