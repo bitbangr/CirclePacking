@@ -1,5 +1,5 @@
 # Circle packing configuration (YAML)
-output_name_slug: "circle_packing"
+output_name_slug: "cpmj_portrait"
 img_path: "./images/Self_Portrait_Mar17.jpeg" 
 
 # Color palette used for packing and CSV - Based on Kroma Paints

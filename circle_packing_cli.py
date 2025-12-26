@@ -142,11 +142,38 @@ class OutputContext:
         return self.day_dir / f"{self.run_prefix}__{artifact_slug}.{ext}"
 
 
-def make_output_context(
-    output_root: str | Path,
-    config: Dict[str, Any],
-    img_path: str | Path,
-) -> OutputContext:
+# def make_output_context(
+#     output_root: str | Path,
+#     config: Dict[str, Any],
+#     img_path: str | Path,
+# ) -> OutputContext:
+#     """
+#     Create the per-run OutputContext using local time.
+
+#     Creates out/YYYYMMDD/ if needed and assigns the next available run counter
+#     by scanning files that start with NNN__ in that day directory.
+#     """
+#     output_root_p = Path(output_root)
+
+#     day_str = day_dir_name()  # local time YYYYMMDD
+#     day_dir = output_root_p / day_str
+#     day_dir.mkdir(parents=True, exist_ok=True)
+
+#     run_n = next_run_counter(day_dir)
+#     run_prefix = build_run_prefix(config=config, img_path=img_path, run_n=run_n, day_str=day_str)
+
+#     return OutputContext(
+#         output_root=output_root_p,
+#         day_str=day_str,
+#         day_dir=day_dir,
+#         run_n=run_n,
+#         run_prefix=run_prefix,
+#     )
+
+def make_output_context(output_root: str | Path, 
+                        config: Dict[str, Any], 
+                        img_path: str | Path
+                        ) -> OutputContext:
     """
     Create the per-run OutputContext using local time.
 
@@ -156,16 +183,30 @@ def make_output_context(
     output_root_p = Path(output_root)
 
     day_str = day_dir_name()  # local time YYYYMMDD
-    day_dir = output_root_p / day_str
-    day_dir.mkdir(parents=True, exist_ok=True)
 
-    run_n = next_run_counter(day_dir)
-    run_prefix = build_run_prefix(config=config, img_path=img_path, run_n=run_n, day_str=day_str)
+    # day folder
+    day_base = output_root_p / day_str
+    day_base.mkdir(parents=True, exist_ok=True)
+
+    # NEW: slug folder inside the day folder
+    cfg_slug = slugify(config.get("output_name_slug", "run"))
+    slug_dir = day_base / cfg_slug
+    slug_dir.mkdir(parents=True, exist_ok=True)
+
+    # run counter should increment within the slug folder
+    run_n = next_run_counter(slug_dir)
+
+    run_prefix = build_run_prefix(
+        config=config,
+        img_path=img_path,
+        run_n=run_n,
+        day_str=day_str,
+    )
 
     return OutputContext(
         output_root=output_root_p,
         day_str=day_str,
-        day_dir=day_dir,
+        day_dir=slug_dir,      # <- changed from day_base
         run_n=run_n,
         run_prefix=run_prefix,
     )
