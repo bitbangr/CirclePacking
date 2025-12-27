@@ -35,7 +35,8 @@ preprocess:
   tile: 16          # cell size in pixels (try 8–32)
 
 physical:
-  output_size_mm: [508, 508]   # width, height in mm 20"x20
+  #output_size_mm: [508, 508]   # width, height in mm 20"x20
+  output_size_mm: [812.8, 812.8]   # width, height in mm 30"x30
   min_circle_diameter_mm: 6
   grid_divisions: 10
   boundary_epsilon: 0.5            # boundary_epsilon: 1e-9 change to see if more space filled in packing 
