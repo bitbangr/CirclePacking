@@ -260,6 +260,15 @@ def out_path(day_dir: Path, run_prefix: str, artifact: str, ext: str) -> Path:
     ext = ext.lstrip(".")
     return day_dir / f"{run_prefix}__{artifact}.{ext}"
 
+def _color_suffix(name: str | None, rgb: tuple[int, int, int]) -> str:
+    if name and name.strip():
+        return _sanitize_id(name.strip())
+    return f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}"
+
+def _svg_with_suffix(svg_path: str, suffix: str) -> str:
+    base, ext = os.path.splitext(svg_path)
+    return f"{base}__{suffix}{ext}"
+
 # =========================
 # Preprocessing: mosaic labeling
 # =========================
@@ -1171,6 +1180,104 @@ def write_layout_svg(
     announce("WRITE_LAYOUT_SVG",{"svg_path":svg_path})
 
 
+#
+
+def write_color_layer_svgs(
+    svg_path: str,
+    regions: list[dict],
+    img_w: int,
+    img_h: int,
+    color_rgb_values: list[tuple[int, int, int]],
+    color_names: list[str] | None,
+    board_w_mm: float,
+    board_h_mm: float,
+    mm_round_mode: str,
+    mm_round_step: float,
+    transparent_bg: bool = True,
+    circle_stroke_mm: float = 0.2,
+) -> list[str]:
+    """
+    Write one SVG per palette color. Each SVG contains only circles for that color,
+    with no grid or labels, but identical physical size/viewBox to the master layout.
+
+    Returns:
+        List of written SVG paths.
+    """
+
+    # px -> mm scale (same as master)
+    px_to_mm_x = board_w_mm / float(img_w)
+    px_to_mm_y = board_h_mm / float(img_h)
+    scale = min(px_to_mm_x, px_to_mm_y)
+
+    # Map exact RGB to name if available
+    name_map: dict[tuple[int, int, int], str] = {}
+    if color_names and len(color_names) >= len(color_rgb_values):
+        for rgb, nm in zip(color_rgb_values, color_names):
+            name_map[tuple(int(v) for v in rgb)] = nm
+
+    # Gather circles by color from regions (regions may already be grouped, but don't assume)
+    by_rgb: dict[tuple[int, int, int], list[dict]] = {}
+    for reg in regions:
+        rgb = tuple(int(v) for v in reg["color"])
+        by_rgb.setdefault(rgb, []).extend(reg.get("circles", []))
+
+    written: list[str] = []
+
+    for rgb, circles in by_rgb.items():
+        if not circles:
+            continue
+
+        nm = name_map.get(rgb)
+        suffix = _color_suffix(nm, rgb)
+        out_path = _svg_with_suffix(svg_path, suffix)
+
+        svg = ET.Element(
+            "svg",
+            xmlns="http://www.w3.org/2000/svg",
+            version="1.1",
+            width=f"{board_w_mm}mm",
+            height=f"{board_h_mm}mm",
+            viewBox=f"0 0 {board_w_mm} {board_h_mm}",
+        )
+
+        if not transparent_bg:
+            ET.SubElement(
+                svg, "rect",
+                x="0", y="0",
+                width=str(board_w_mm), height=str(board_h_mm),
+                fill="black"
+            )
+
+        gid = f"color-{_sanitize_id(nm) if nm else _sanitize_id(f'rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}')}"
+        grp = ET.SubElement(
+            svg, "g",
+            id=gid,
+            fill=f"rgb({rgb[0]},{rgb[1]},{rgb[2]})",
+            stroke="black",
+            **{"stroke-width": str(circle_stroke_mm), "stroke-opacity": "0.35"}
+        )
+
+        for c in circles:
+            cx_px, cy_px = c["center"]
+            r_px = int(c["radius"])
+
+            cx_mm = cx_px * scale
+            cy_mm = cy_px * scale
+            r_mm  = r_px  * scale
+
+            el = ET.SubElement(grp, "circle", cx=str(cx_mm), cy=str(cy_mm), r=str(r_mm))
+            el.set("data-rgb", f"[{rgb[0]},{rgb[1]},{rgb[2]}]")
+            el.set("data-name", nm or f"rgb-{rgb[0]}-{rgb[1]}-{rgb[2]}")
+            el.set("data-d_mm", str(int(round(r_mm * 2))))
+
+        ET.ElementTree(svg).write(out_path, encoding="utf-8", xml_declaration=True)
+
+        announce("WRITE_COLOR_LAYER_SVG", {"svg_path": out_path, "rgb": rgb, "name": nm})
+        written.append(out_path)
+
+    return written
+
+
 # =========================
 # Cluster-to-color assignment
 # =========================
@@ -1589,6 +1696,20 @@ def pack_circles_from_image(
             )
             print(f"[OK] SVG layout saved: {svg_path}")
 
+
+            write_color_layer_svgs(
+                svg_path=svg_path,
+                regions=all_regions_output,
+                img_w=w, img_h=h,
+                color_rgb_values=user_colors,
+                color_names=color_names,
+                board_w_mm=float(out_w_mm),
+                board_h_mm=float(out_h_mm),
+                mm_round_mode=mm_round_mode,
+                mm_round_step=mm_round_step,
+                transparent_bg=svg_transparent,   # True usually best for “overlay” layers
+            )
+
             # --- Assembly-aid CSV ---
             # aid_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly.csv")
             # aid_summary_csv_path = os.path.join(visualization_outdir, f"packing_{session_id}_assembly_summary.csv")
@@ -1724,7 +1845,7 @@ def main():
         print(json.dumps({"error": f"Failed to read config: {e}"}))
         return
 
-# ********************************
+    # ********************************
     # after cfg = yaml.safe_load(...)
     # --- 1. Physical settings (from YAML) ---
     phys = cfg["physical"]
@@ -1743,9 +1864,6 @@ def main():
         output_h_px=int(cfg.get("output_size", [1000, 1000])[1]),
         outdir=str(cfg.get("visualization_outdir", "./circle_packing_outputs"))
     )
-
-    # --- render (pixels) ---
-    out_w_px, out_h_px = map(int, cfg.get("output_size", [1000, 1000]))
 
     # --- 3. Circle sizes conversion (mm → px) ---
     circle_sizes_mm = cfg.get("circle_sizes_mm", [])
