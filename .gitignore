@@ -24,7 +24,7 @@ dist/
 # Jupyter
 .ipynb_checkpoints/
 
-circle_packing_pat
+image_circle_packing_pat.txt
 circle_packing_outputs/
 
 # --- Sphinx documentation ---
